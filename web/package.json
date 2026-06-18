@@ -11,7 +11,7 @@
     "gen:check": "npm run gen && git diff --exit-code src/api"
   },
   "devDependencies": {
-    "openapi-typescript": "7.5.0",
+    "openapi-typescript": "7.13.0",
     "openapi-zod-client": "1.18.2",
     "typescript": "5.9.3"
   },
