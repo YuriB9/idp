@@ -22,14 +22,35 @@ type Store interface {
 	TransitionStatus(ctx context.Context, id uuid.UUID, expected, next repository.Status) error
 }
 
-// Catalog — usecase каталога сервисов.
-type Catalog struct {
-	store Store
+// WorkflowStarter запускает Temporal-workflow «Создание сервиса» (исполняется
+// DevInfra worker'ом). Узкий интерфейс изолирует usecase от Temporal SDK и
+// позволяет подменять его фейком в тестах.
+type WorkflowStarter interface {
+	StartCreateService(ctx context.Context, serviceID, project, name string) error
 }
 
-// New создаёт usecase поверх Store.
-func New(store Store) *Catalog {
-	return &Catalog{store: store}
+// Catalog — usecase каталога сервисов.
+type Catalog struct {
+	store   Store
+	starter WorkflowStarter
+}
+
+// Option конфигурирует Catalog.
+type Option func(*Catalog)
+
+// WithStarter подключает запуск workflow создания. Без него CreateService
+// возвращает ошибку (запуск не сконфигурирован).
+func WithStarter(s WorkflowStarter) Option {
+	return func(c *Catalog) { c.starter = s }
+}
+
+// New создаёт usecase поверх Store. Запуск workflow подключается через WithStarter.
+func New(store Store, opts ...Option) *Catalog {
+	c := &Catalog{store: store}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Get возвращает запись каталога по (project, name). Отсутствие пробрасывается
@@ -43,8 +64,8 @@ func (c *Catalog) List(ctx context.Context, project string, pageSize int, pageTo
 	return c.store.List(ctx, project, pageSize, pageToken)
 }
 
-// CreateRecord вставляет запись со статусом CREATING. БЕЗ запуска Temporal
-// workflow (провизия ресурсов — отдельный change create-service-workflow).
+// CreateRecord вставляет запись со статусом CREATING БЕЗ запуска workflow.
+// Используется как первый шаг CreateService и в сценариях, где запуск не нужен.
 func (c *Catalog) CreateRecord(ctx context.Context, project, name string) (repository.Service, error) {
 	s := repository.Service{
 		ID:      uuid.New(),
@@ -54,6 +75,30 @@ func (c *Catalog) CreateRecord(ctx context.Context, project, name string) (repos
 	}
 	if err := c.store.Create(ctx, s); err != nil {
 		return repository.Service{}, fmt.Errorf("usecase: создание записи каталога: %w", err)
+	}
+	return s, nil
+}
+
+// CreateService фиксирует запись каталога (status=CREATING) и затем запускает
+// Temporal-workflow «Создание сервиса» с детерминированным WorkflowID.
+// Порядок строгий: запись фиксируется ПЕРВОЙ, и только при успешной вставке
+// стартует workflow (workflow не стартует при неуспешной вставке). Если запуск
+// workflow не удался, запись best-effort переводится в FAILED, чтобы не
+// оставлять её «висящей» в CREATING без исполнителя.
+func (c *Catalog) CreateService(ctx context.Context, project, name string) (repository.Service, error) {
+	if c.starter == nil {
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow не сконфигурирован")
+	}
+	s, err := c.CreateRecord(ctx, project, name)
+	if err != nil {
+		return repository.Service{}, err
+	}
+	if err := c.starter.StartCreateService(ctx, s.ID.String(), project, name); err != nil {
+		// Best-effort: запись без исполнителя переводим в FAILED (guarded-CAS).
+		if terr := c.store.TransitionStatus(ctx, s.ID, repository.StatusCreating, repository.StatusFailed); terr != nil {
+			return repository.Service{}, fmt.Errorf("usecase: запуск workflow не удался (%w); перевод в FAILED не удался: %w", err, terr)
+		}
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow создания: %w", err)
 	}
 	return s, nil
 }

@@ -22,6 +22,7 @@ import (
 type Catalog interface {
 	Get(ctx context.Context, project, name string) (repository.Service, error)
 	List(ctx context.Context, project string, pageSize int, pageToken string) ([]repository.Service, string, error)
+	CreateService(ctx context.Context, project, name string) (repository.Service, error)
 }
 
 // Server реализует projectsv1.ProjectsServiceServer.
@@ -74,6 +75,34 @@ func (s *Server) ListServices(ctx context.Context, req *projectsv1.ListServicesR
 		out = append(out, p)
 	}
 	return &projectsv1.ListServicesResponse{Services: out, NextPageToken: next}, nil
+}
+
+// CreateService фиксирует запись каталога (status=CREATING) и запускает workflow
+// провизии. Возвращает идентификатор записи и стартовый статус CREATING.
+func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServiceRequest) (*projectsv1.CreateServiceResponse, error) {
+	if req.GetProject() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project и name обязательны")
+	}
+	// Граница RBAC: реальная проверка прав (IDM CheckAccess) — отдельный change
+	// idm-rbac-min. Здесь точка внедрения проверки намеренно оставлена заглушкой.
+	if err := s.authorize(ctx, req.GetProject()); err != nil {
+		return nil, s.mapError(ctx, "CreateService", err)
+	}
+	svc, err := s.catalog.CreateService(ctx, req.GetProject(), req.GetName())
+	if err != nil {
+		return nil, s.mapError(ctx, "CreateService", err)
+	}
+	st, err := statusToProto(svc.Status)
+	if err != nil {
+		return nil, s.mapError(ctx, "CreateService", err)
+	}
+	return &projectsv1.CreateServiceResponse{Id: svc.ID.String(), Status: st}, nil
+}
+
+// authorize — заглушка проверки прав (граница для будущего IDM CheckAccess).
+// В MVP всегда разрешает; реальная реализация — change idm-rbac-min.
+func (s *Server) authorize(_ context.Context, _ string) error {
+	return nil
 }
 
 // mapError переводит доменную ошибку в gRPC-статус. Детали внутренних ошибок не

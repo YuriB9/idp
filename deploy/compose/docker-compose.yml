@@ -204,11 +204,20 @@ services:
       TEMPORAL_HOSTPORT: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
       TEMPORAL_TASK_QUEUE: "devinfra"
+      # Финальные activities перехода статуса (CREATING→ACTIVE/FAILED) ходят в БД
+      # каталога проектов через guarded-CAS (ADR-0008).
+      PG_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
       GITLAB_BASE_URL: "http://mock-gitlab:8080"
       VAULT_BASE_URL: "http://mock-vault:8080"
       HARBOR_BASE_URL: "http://mock-harbor:8080"
+      # Локально интеграции — http-моки на приватных адресах, поэтому SSRF-guard
+      # выключаем явным флагом (единственный разрешённый способ; в проде — всегда
+      # включён: https + публичные адреса).
+      SSRF_DISABLED: "true"
     restart: unless-stopped
     depends_on:
+      postgres-projects:
+        condition: service_healthy
       temporal:
         condition: service_healthy
       mock-gitlab:
