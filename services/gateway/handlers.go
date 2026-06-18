@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -165,12 +166,7 @@ func parsePageSize(raw string) (int32, error) {
 }
 
 // errInvalidPageSize — внутренняя ошибка разбора page_size (наружу не уходит).
-var errInvalidPageSize = errInvalid("invalid page_size")
-
-// errInvalid — простая строковая ошибка для внутреннего использования.
-type errInvalid string
-
-func (e errInvalid) Error() string { return string(e) }
+var errInvalidPageSize = errors.New("invalid page_size")
 
 // statusString маппит gRPC-статус сервиса в строковый статус периметра
 // (схема ServiceStatus). Неизвестное значение не маппится молча в дефолт.
