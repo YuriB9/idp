@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/YuriB9/idp/pkg v0.0.0
 	github.com/go-chi/chi/v5 v5.3.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.21.0
 	google.golang.org/grpc v1.81.1
 )
 
