@@ -1,0 +1,84 @@
+schema: spec-driven-with-adr
+
+context: |
+  Проект: Internal Developer Platform (IDP), MVP-срез по команде DevInfra.
+  Перед работой над ЛЮБЫМ артефактом сверяйся с документами в docs/ и считай
+  зафиксированные там решения обязательными ограничениями, а не предложениями:
+    - docs/IDP_MVP_План.md — объём MVP, соответствие целевой C4-архитектуре,
+      этапы, инженерные стандарты, таймлайн.
+    - docs/adr/0001..0005 — принятые архитектурные решения (MADR).
+
+  Стек (зафиксирован):
+    - Go 1.26, монорепо на go.work: ./pkg (общее) + модуль на сервис
+      (services/gateway, services/idm, services/projects, services/devinfra-worker)
+      + ./tests/e2e + изолированный ./tools (вне go.work, GOWORK=off). Frontend — ./web.
+    - Frontend: React 19 + Vite + TypeScript + TanStack Query + react-router;
+      формы — react-hook-form + zod (схема = источник правды); рантайм-валидация
+      ответов API через zod .parse.
+    - Оркестрация: Temporal (НЕ голый AMQP). Сервис проектов = API + Temporal worker
+      (раздельные процессы). Внешние вызовы — activities с RetryPolicy/таймаутами/
+      heartbeat; non-retryable ApplicationError → ветка компенсации (Saga).
+    - Внутренний транспорт: gRPC/protobuf с первого дня (.proto = контракт).
+      Периметр (портал ↔ API-шлюз): OpenAPI + https/json, кодоген TS-клиента.
+    - Хранилище: PostgreSQL (каталог проектов; отдельный — IDM), DragonflyDB (кэш IDM).
+    - Инфра: Kubernetes (прод) / docker-compose (локально).
+
+  Управляемые ресурсы MVP — только DevInfra worker: GitLab (репозиторий),
+  Vault (секреты/AppRole), Harbor (директория образов). K8s/DBA worker'ы,
+  интеграционный шлюз и внешние системы — ВНЕ MVP, но их границы (gRPC-интерфейсы,
+  постановка задач в Temporal) должны быть заложены, чтобы наполнение позже не
+  требовало переписывать ядро.
+
+  Обязательные инженерные стандарты:
+    - Безопасность fail-closed: пустой JWKS_URL → os.Exit(1) (не passthrough);
+      JWT строго (audience/issuer/validMethods/expirationRequired); admin-key через
+      subtle.ConstantTimeCompare; SSRF-guard на ВСЕХ исходящих к GitLab/Vault/Harbor
+      (ValidateURL на записи + GuardedDialContext на отправке); никогда не отдавать
+      err.Error() клиенту.
+    - БД: переходы статусов сервиса (creating→active→decommissioned, failed) —
+      guarded-CAS (UPDATE ... WHERE status=$expected, RowsAffected==0 → 409),
+      не check-then-act; многошаговые записи в транзакции; события — после commit.
+    - Observability: content-aware /readyz (пинг Postgres/Dragonfly + сигнал живости
+      Temporal worker); RoutePattern() в Prometheus-метках (не URL.Path);
+      OpenTelemetry end-to-end; единый ключ slog "err".
+    - Тесты: goleak в пакетах с горутинами; table-driven + t.Parallel(); temporal
+      testsuite для workflow; стаб/in-memory тесты в дефолтном прогоне.
+
+  Политика отказов (Saga): «Создание» — при окончательной недоступности Vault
+  полный откат компенсациями (fallback: failed + alert). «Перенос» — transfer
+  GitLab и миграция Vault частично необратимы → точка невозврата + alert оператору,
+  не молчаливый откат.
+
+  Открытый вопрос для закрытия в спеке decommission: проверка снятой нагрузки из K8s
+  при отсутствии K8s worker в MVP — прямой запрос к кластеру или явный чек-флаг.
+
+rules:
+  proposal:
+    - Писать на русском языке
+    - Явно укажи, какому ADR и разделу docs/IDP_MVP_План.md соответствует изменение
+    - Включи план отката/компенсаций, если изменение затрагивает провизию ресурсов
+    - Обозначь, какие сервисы и границы (gRPC/Temporal) затрагиваются
+  specs:
+    - Писать на русском языке
+    - В тексте КАЖДОГО требования (### Requirement) обязателен литеральный
+      нормативный ключ SHALL или MUST (валидатор OpenSpec требует именно это
+      слово). Писать как «ДОЛЖЕН (MUST) …» / «SHALL …» рядом с русской формулировкой
+    - Сценарии в формате Given/When/Then
+    - Для каждого workflow опиши happy-path И ветки компенсаций/ретраев
+    - Зафиксируй переходы статусов как guarded-CAS с ожидаемым исходным статусом
+  adr:
+    - Писать на русском языке
+    - Создавать ADR только для значимых архитектурных решений (транспорт/RabbitMQ,
+      хранилище/pgx-Postgres-Redis, auth/Keycloak-JWKS, раскладка go.work,
+      границы сервисов, версионирование событий); для рутинных изменений — пропускать
+    - Файл класть в docs/adr/NNNN-kebab-title.md вне openspec/, один ADR на решение
+    - Датировать реальной датой решения; в поле Change указывать имя текущего change
+    - Отменённое решение помечать Superseded by ADR-XXXX, не удаляя старый ADR
+  design:
+    - Писать на русском языке
+    - Для распределённых операций включи sequence-диаграмму (workflow ↔ activities ↔ GitLab/Vault/Harbor)
+    - Укажи идемпотентность (детерминированный WorkflowID) и RetryPolicy
+  tasks:
+    - Писать на русском языке
+    - Первым пунктом — сверка с docs/ и затронутыми ADR
+    - Разделяй задачи по сервисам/модулям go.work
