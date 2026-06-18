@@ -38,6 +38,87 @@ func TestCreateRecord(t *testing.T) {
 	}
 }
 
+// fakeStarter — управляемый стаб WorkflowStarter.
+type fakeStarter struct {
+	err          error
+	gotServiceID string
+	gotProject   string
+	gotName      string
+	called       bool
+}
+
+func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string) error {
+	f.called = true
+	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
+	return f.err
+}
+
+// TestCreateService_StartsWorkflowAfterInsert: запись фиксируется со статусом
+// CREATING, затем запускается workflow с её идентификатором.
+func TestCreateService_StartsWorkflowAfterInsert(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+	ctx := context.Background()
+
+	got, err := uc.CreateService(ctx, "proj", "svc")
+	if err != nil {
+		t.Fatalf("CreateService: неожиданная ошибка: %v", err)
+	}
+	if got.Status != repository.StatusCreating {
+		t.Fatalf("статус = %q, ожидали CREATING", got.Status)
+	}
+	if !starter.called {
+		t.Fatal("ожидали запуск workflow")
+	}
+	if starter.gotServiceID != got.ID.String() || starter.gotProject != "proj" || starter.gotName != "svc" {
+		t.Fatalf("в workflow переданы неверные аргументы: %+v", starter)
+	}
+	// Запись действительно зафиксирована (insert до запуска).
+	persisted, err := uc.Get(ctx, "proj", "svc")
+	if err != nil {
+		t.Fatalf("запись должна быть зафиксирована: %v", err)
+	}
+	if persisted.Status != repository.StatusCreating {
+		t.Fatalf("persisted статус = %q, ожидали CREATING", persisted.Status)
+	}
+}
+
+// TestCreateService_StartFailureMarksFailed: при ошибке запуска workflow запись
+// переводится в FAILED (не остаётся «висящей» в CREATING), ошибка возвращается.
+func TestCreateService_StartFailureMarksFailed(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	starter := &fakeStarter{err: errors.New("temporal недоступен")}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+	ctx := context.Background()
+
+	if _, err := uc.CreateService(ctx, "proj", "svc"); err == nil {
+		t.Fatal("ожидали ошибку при сбое запуска workflow")
+	}
+	persisted, err := uc.Get(ctx, "proj", "svc")
+	if err != nil {
+		t.Fatalf("запись должна существовать: %v", err)
+	}
+	if persisted.Status != repository.StatusFailed {
+		t.Fatalf("статус = %q, ожидали FAILED после сбоя запуска", persisted.Status)
+	}
+}
+
+// TestCreateService_NoStarterConfigured: без сконфигурированного запуска
+// CreateService возвращает ошибку (а не молча игнорирует).
+func TestCreateService_NoStarterConfigured(t *testing.T) {
+	t.Parallel()
+
+	uc := usecase.New(newMemStore())
+	if _, err := uc.CreateService(context.Background(), "proj", "svc"); err == nil {
+		t.Fatal("ожидали ошибку при отсутствии starter")
+	}
+}
+
 // TestGet проверяет чтение существующей записи и NotFound для отсутствующей.
 func TestGet(t *testing.T) {
 	t.Parallel()

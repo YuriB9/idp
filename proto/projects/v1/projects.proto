@@ -18,9 +18,10 @@ enum ServiceStatus {
   SERVICE_STATUS_FAILED = 4;
 }
 
-// ProjectsService — интерфейс чтения каталога. Доменные user stories
-// (создание/перенос/удаление) добавляются последующими changes; здесь —
-// чтение одной записи и листинг с keyset-пагинацией.
+// ProjectsService — интерфейс каталога. Чтение (GetService/ListServices) и
+// запуск создания сервиса (CreateService → стартует Temporal-workflow провизии,
+// исполняемый DevInfra worker'ом, ADR-0001). Доменные user stories переноса и
+// удаления добавляются последующими changes.
 service ProjectsService {
   // GetService возвращает текущее состояние сервиса из каталога.
   // Отсутствие записи отображается в gRPC-статус NotFound.
@@ -28,6 +29,13 @@ service ProjectsService {
   // ListServices возвращает страницу сервисов проекта с keyset-пагинацией
   // по непрозрачному курсору (сортировка по (created_at, id)).
   rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  // CreateService фиксирует запись каталога со статусом CREATING и запускает
+  // Temporal-workflow «Создание сервиса» (детерминированный WorkflowID для
+  // идемпотентности повторного запуска). Возвращает идентификатор записи и
+  // стартовый статус CREATING. Сама провизия (GitLab/Vault/Harbor) выполняется
+  // асинхронно worker'ом; финальный статус (ACTIVE/FAILED) — по завершении
+  // workflow. BREAKING: добавление метода в существующий сервис-контракт.
+  rpc CreateService(CreateServiceRequest) returns (CreateServiceResponse);
 }
 
 // Service — запись каталога (единица-сервис).
@@ -68,4 +76,18 @@ message ListServicesResponse {
   repeated Service services = 1;
   // next_page_token — курсор следующей страницы; пустой — конец выборки.
   string next_page_token = 2;
+}
+
+message CreateServiceRequest {
+  // project — идентификатор проекта-владельца.
+  string project = 1;
+  // name — имя создаваемого сервиса внутри проекта.
+  string name = 2;
+}
+
+message CreateServiceResponse {
+  // id — идентификатор созданной записи каталога (UUID в строковом виде).
+  string id = 1;
+  // status — стартовый статус записи; сразу после запуска — CREATING.
+  ServiceStatus status = 2;
 }

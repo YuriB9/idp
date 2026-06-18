@@ -31,6 +31,7 @@ import (
 	"github.com/YuriB9/idp/services/projects/internal/grpcapi"
 	"github.com/YuriB9/idp/services/projects/internal/repository"
 	"github.com/YuriB9/idp/services/projects/internal/usecase"
+	"github.com/YuriB9/idp/services/projects/internal/wfstarter"
 )
 
 func main() {
@@ -64,11 +65,6 @@ func run() error {
 	}
 	defer pool.Close()
 
-	// Сборка доменных слоёв: repository → usecase → gRPC-транспорт.
-	repo := repository.New(pool)
-	catalog := usecase.New(repo)
-	projectsAPI := grpcapi.New(catalog, log)
-
 	// Lazy-клиент Temporal: не падаем на старте, если сервер недоступен;
 	// готовность отражается в /readyz через CheckHealth.
 	temporalClient, err := client.NewLazyClient(client.Options{
@@ -80,6 +76,12 @@ func run() error {
 		return err
 	}
 	defer temporalClient.Close()
+
+	// Сборка доменных слоёв: repository → usecase (+ запуск workflow) → транспорт.
+	repo := repository.New(pool)
+	starter := wfstarter.New(temporalClient, config.String("TEMPORAL_TASK_QUEUE", ""))
+	catalog := usecase.New(repo, usecase.WithStarter(starter))
+	projectsAPI := grpcapi.New(catalog, log)
 
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	projectsv1.RegisterProjectsServiceServer(grpcSrv, projectsAPI)

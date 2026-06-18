@@ -24,17 +24,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProjectsService_GetService_FullMethodName   = "/projects.v1.ProjectsService/GetService"
-	ProjectsService_ListServices_FullMethodName = "/projects.v1.ProjectsService/ListServices"
+	ProjectsService_GetService_FullMethodName    = "/projects.v1.ProjectsService/GetService"
+	ProjectsService_ListServices_FullMethodName  = "/projects.v1.ProjectsService/ListServices"
+	ProjectsService_CreateService_FullMethodName = "/projects.v1.ProjectsService/CreateService"
 )
 
 // ProjectsServiceClient is the client API for ProjectsService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ProjectsService — интерфейс чтения каталога. Доменные user stories
-// (создание/перенос/удаление) добавляются последующими changes; здесь —
-// чтение одной записи и листинг с keyset-пагинацией.
+// ProjectsService — интерфейс каталога. Чтение (GetService/ListServices) и
+// запуск создания сервиса (CreateService → стартует Temporal-workflow провизии,
+// исполняемый DevInfra worker'ом, ADR-0001). Доменные user stories переноса и
+// удаления добавляются последующими changes.
 type ProjectsServiceClient interface {
 	// GetService возвращает текущее состояние сервиса из каталога.
 	// Отсутствие записи отображается в gRPC-статус NotFound.
@@ -42,6 +44,13 @@ type ProjectsServiceClient interface {
 	// ListServices возвращает страницу сервисов проекта с keyset-пагинацией
 	// по непрозрачному курсору (сортировка по (created_at, id)).
 	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
+	// CreateService фиксирует запись каталога со статусом CREATING и запускает
+	// Temporal-workflow «Создание сервиса» (детерминированный WorkflowID для
+	// идемпотентности повторного запуска). Возвращает идентификатор записи и
+	// стартовый статус CREATING. Сама провизия (GitLab/Vault/Harbor) выполняется
+	// асинхронно worker'ом; финальный статус (ACTIVE/FAILED) — по завершении
+	// workflow. BREAKING: добавление метода в существующий сервис-контракт.
+	CreateService(ctx context.Context, in *CreateServiceRequest, opts ...grpc.CallOption) (*CreateServiceResponse, error)
 }
 
 type projectsServiceClient struct {
@@ -72,13 +81,24 @@ func (c *projectsServiceClient) ListServices(ctx context.Context, in *ListServic
 	return out, nil
 }
 
+func (c *projectsServiceClient) CreateService(ctx context.Context, in *CreateServiceRequest, opts ...grpc.CallOption) (*CreateServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateServiceResponse)
+	err := c.cc.Invoke(ctx, ProjectsService_CreateService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProjectsServiceServer is the server API for ProjectsService service.
 // All implementations must embed UnimplementedProjectsServiceServer
 // for forward compatibility.
 //
-// ProjectsService — интерфейс чтения каталога. Доменные user stories
-// (создание/перенос/удаление) добавляются последующими changes; здесь —
-// чтение одной записи и листинг с keyset-пагинацией.
+// ProjectsService — интерфейс каталога. Чтение (GetService/ListServices) и
+// запуск создания сервиса (CreateService → стартует Temporal-workflow провизии,
+// исполняемый DevInfra worker'ом, ADR-0001). Доменные user stories переноса и
+// удаления добавляются последующими changes.
 type ProjectsServiceServer interface {
 	// GetService возвращает текущее состояние сервиса из каталога.
 	// Отсутствие записи отображается в gRPC-статус NotFound.
@@ -86,6 +106,13 @@ type ProjectsServiceServer interface {
 	// ListServices возвращает страницу сервисов проекта с keyset-пагинацией
 	// по непрозрачному курсору (сортировка по (created_at, id)).
 	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
+	// CreateService фиксирует запись каталога со статусом CREATING и запускает
+	// Temporal-workflow «Создание сервиса» (детерминированный WorkflowID для
+	// идемпотентности повторного запуска). Возвращает идентификатор записи и
+	// стартовый статус CREATING. Сама провизия (GitLab/Vault/Harbor) выполняется
+	// асинхронно worker'ом; финальный статус (ACTIVE/FAILED) — по завершении
+	// workflow. BREAKING: добавление метода в существующий сервис-контракт.
+	CreateService(context.Context, *CreateServiceRequest) (*CreateServiceResponse, error)
 	mustEmbedUnimplementedProjectsServiceServer()
 }
 
@@ -101,6 +128,9 @@ func (UnimplementedProjectsServiceServer) GetService(context.Context, *GetServic
 }
 func (UnimplementedProjectsServiceServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServices not implemented")
+}
+func (UnimplementedProjectsServiceServer) CreateService(context.Context, *CreateServiceRequest) (*CreateServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateService not implemented")
 }
 func (UnimplementedProjectsServiceServer) mustEmbedUnimplementedProjectsServiceServer() {}
 func (UnimplementedProjectsServiceServer) testEmbeddedByValue()                         {}
@@ -159,6 +189,24 @@ func _ProjectsService_ListServices_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProjectsService_CreateService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectsServiceServer).CreateService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectsService_CreateService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectsServiceServer).CreateService(ctx, req.(*CreateServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProjectsService_ServiceDesc is the grpc.ServiceDesc for ProjectsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -173,6 +221,10 @@ var ProjectsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListServices",
 			Handler:    _ProjectsService_ListServices_Handler,
+		},
+		{
+			MethodName: "CreateService",
+			Handler:    _ProjectsService_CreateService_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -18,11 +19,12 @@ import (
 
 // fakeCatalog — управляемый стаб usecase-слоя для транспортных тестов.
 type fakeCatalog struct {
-	svc      repository.Service
-	getErr   error
-	listErr  error
-	listItem []repository.Service
-	listNext string
+	svc       repository.Service
+	getErr    error
+	createErr error
+	listErr   error
+	listItem  []repository.Service
+	listNext  string
 }
 
 func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, error) {
@@ -31,6 +33,10 @@ func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, 
 
 func (f *fakeCatalog) List(context.Context, string, int, string) ([]repository.Service, string, error) {
 	return f.listItem, f.listNext, f.listErr
+}
+
+func (f *fakeCatalog) CreateService(context.Context, string, string) (repository.Service, error) {
+	return f.svc, f.createErr
 }
 
 func discardLogger() *slog.Logger {
@@ -102,6 +108,66 @@ func TestGetServiceMapping(t *testing.T) {
 			// Внутренние детали не раскрываются клиенту.
 			if strings.Contains(st.Message(), secret) {
 				t.Fatalf("сообщение клиенту утекло: %q", st.Message())
+			}
+		})
+	}
+}
+
+// TestCreateServiceMapping покрывает CreateService: успех возвращает id+CREATING,
+// валидация и доменные ошибки маппятся в gRPC-коды без утечки деталей.
+func TestCreateServiceMapping(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	tests := []struct {
+		name     string
+		req      *projectsv1.CreateServiceRequest
+		fake     *fakeCatalog
+		wantCode codes.Code
+	}{
+		{
+			name:     "успех → CREATING",
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
+			fake:     &fakeCatalog{svc: repository.Service{ID: id, Project: "p", Name: "n", Status: repository.StatusCreating}},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "пустой name → InvalidArgument",
+			req:      &projectsv1.CreateServiceRequest{Project: "p"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "конфликт → FailedPrecondition",
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
+			fake:     &fakeCatalog{createErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
+			wantCode: codes.FailedPrecondition,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := New(tc.fake, discardLogger())
+			resp, err := srv.CreateService(context.Background(), tc.req)
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("неожиданная ошибка: %v", err)
+				}
+				if resp.GetStatus() != projectsv1.ServiceStatus_SERVICE_STATUS_CREATING {
+					t.Fatalf("статус = %v, ожидали CREATING", resp.GetStatus())
+				}
+				if resp.GetId() != id.String() {
+					t.Fatalf("id = %q, ожидали %q", resp.GetId(), id.String())
+				}
+				return
+			}
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("ожидали gRPC-статус, получили %v", err)
+			}
+			if st.Code() != tc.wantCode {
+				t.Fatalf("код = %v, ожидали %v", st.Code(), tc.wantCode)
 			}
 		})
 	}
