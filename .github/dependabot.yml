@@ -39,3 +39,9 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # openapi-typescript@7.x / openapi-zod-client требуют peer typescript@^5.x.
+      # Мажорные апгрейды TypeScript (6+) ломают codegen-тулчейн — игнорируем,
+      # пока инструменты не выпустят поддержку. См. закрытый PR #7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
