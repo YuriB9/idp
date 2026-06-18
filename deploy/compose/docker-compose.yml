@@ -96,6 +96,14 @@ services:
         condition: service_healthy
     ports:
       - "7233:7233"
+    # auto-setup провижинит схему ~30-60s; frontend слушает на IP контейнера
+    # (не loopback), поэтому health проверяем через $(hostname -i).
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address $(hostname -i):7233 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
   temporal-ui:
     image: temporalio/ui:2.31.2
@@ -145,6 +153,7 @@ services:
       # отключаем явным флагом (единственный разрешённый способ). В проде —
       # реальный JWKS_URL (https), fail-closed.
       AUTH_DISABLED: "true"
+    restart: unless-stopped
     depends_on:
       - idm
       - projects
@@ -161,9 +170,12 @@ services:
       AUTH_DISABLED: "true"
       PG_DSN: "postgres://idm:idm@postgres-idm:5432/idm?sslmode=disable"
       REDIS_ADDR: "dragonfly:6379"
+    restart: unless-stopped
     depends_on:
-      - postgres-idm
-      - dragonfly
+      postgres-idm:
+        condition: service_healthy
+      dragonfly:
+        condition: service_started
 
   projects:
     build:
@@ -176,9 +188,12 @@ services:
       PG_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
       TEMPORAL_HOSTPORT: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
+    restart: unless-stopped
     depends_on:
-      - postgres-projects
-      - temporal
+      postgres-projects:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
 
   devinfra-worker:
     build:
@@ -192,8 +207,13 @@ services:
       GITLAB_BASE_URL: "http://mock-gitlab:8080"
       VAULT_BASE_URL: "http://mock-vault:8080"
       HARBOR_BASE_URL: "http://mock-harbor:8080"
+    restart: unless-stopped
     depends_on:
-      - temporal
-      - mock-gitlab
-      - mock-vault
-      - mock-harbor
+      temporal:
+        condition: service_healthy
+      mock-gitlab:
+        condition: service_started
+      mock-vault:
+        condition: service_started
+      mock-harbor:
+        condition: service_started
