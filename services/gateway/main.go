@@ -1,13 +1,13 @@
 // Command gateway — тонкий API-шлюз периметра: HTTP-роутер (chi) для портала
-// и gRPC-клиенты к IDM и сервису проектов (ADR-0002, ADR-0003). В этом
-// изменении — скелет: маршрутизация и health, без доменной логики.
+// и gRPC-клиенты к IDM и сервису проектов (ADR-0002, ADR-0003, ADR-0009).
+// Доменные REST-ручки сервисов (создание/чтение/листинг) реализованы в
+// handlers.go поверх gRPC-клиента projectsv1.
 package main
 
 import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -53,10 +53,14 @@ func run() error {
 	}
 	defer func() { _ = projectsConn.Close() }()
 
-	// Клиенты инициализированы (используются доменными changes); связываем,
-	// чтобы зафиксировать границы контракта.
+	// IDM-клиент пока не используется доменными ручками периметра (RBAC
+	// CheckAccess — отдельный change idm-rbac-min); связываем, чтобы
+	// зафиксировать границу контракта. Клиент projects — основа REST-ручек.
 	_ = idmv1.NewAccessServiceClient(idmConn)
-	_ = projectsv1.NewProjectsServiceClient(projectsConn)
+	services := &servicesAPI{
+		client: projectsv1.NewProjectsServiceClient(projectsConn),
+		log:    log,
+	}
 
 	router := chi.NewRouter()
 	router.Use(httpserver.RequestID)
@@ -64,11 +68,8 @@ func run() error {
 	router.Use(httpserver.RateLimit(100, 50))
 	router.Route("/api", func(r chi.Router) {
 		r.Use(httpserver.Auth(verifier, log))
-		r.Get("/services", func(w http.ResponseWriter, _ *http.Request) {
-			// Каркас: доменная логика листинга — в отдельном change.
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("[]"))
-		})
+		// Доменные ресурсы периметра (создание/чтение/листинг сервисов).
+		services.register(r)
 	})
 
 	srv := httpserver.New(httpserver.Config{

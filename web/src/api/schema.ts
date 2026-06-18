@@ -21,15 +21,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/services": {
+    "/projects/{project}/services": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Список сервисов (каркас, доменная логика — позже) */
+        /** Список сервисов проекта с keyset-пагинацией */
         get: operations["listServices"];
+        put?: never;
+        /** Запуск создания сервиса в проекте */
+        post: operations["createService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{project}/services/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Чтение статуса одного сервиса проекта */
+        get: operations["getService"];
         put?: never;
         post?: never;
         delete?: never;
@@ -56,9 +74,60 @@ export interface components {
             name: string;
             status: components["schemas"]["ServiceStatus"];
         };
+        ServiceList: {
+            services: components["schemas"]["ServiceSummary"][];
+            /** @description Курсор следующей страницы; пустой — конец выборки. */
+            next_page_token: string;
+        };
+        CreateServiceRequest: {
+            /** @description Имя создаваемого сервиса внутри проекта. */
+            name: string;
+        };
+        CreateServiceResult: {
+            /** @description Идентификатор созданной записи каталога. */
+            id: string;
+            status: components["schemas"]["ServiceStatus"];
+        };
+        Error: {
+            /** @description Стабильное сообщение об ошибке для клиента. Внутренние детали (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера. */
+            error: string;
+        };
     };
-    responses: never;
-    parameters: never;
+    responses: {
+        /** @description Некорректный запрос (валидация входных данных) */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Ресурс не найден */
+        NotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Конфликт состояния (например, имя сервиса уже занято) */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+    };
+    parameters: {
+        /** @description Идентификатор проекта-владельца. */
+        ProjectPath: string;
+        /** @description Имя сервиса внутри проекта. */
+        ServiceNamePath: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -87,22 +156,86 @@ export interface operations {
     };
     listServices: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+                page_size?: number;
+                /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
+                page_token?: string;
+            };
             header?: never;
-            path?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+            };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Список сервисов */
+            /** @description Страница сервисов проекта */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceSummary"][];
+                    "application/json": components["schemas"]["ServiceList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+        };
+    };
+    createService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Создание запущено, запись зафиксирована со статусом creating */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateServiceResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+                /** @description Имя сервиса внутри проекта. */
+                name: components["parameters"]["ServiceNamePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Текущее состояние сервиса */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSummary"];
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
 }
