@@ -1,12 +1,14 @@
 openapi: 3.1.0
 info:
   title: IDP Perimeter API
-  version: 0.1.0
+  version: 0.2.0
   description: >
     Контракт периметра (портал ↔ API-шлюз) платформы IDP. Источник правды для
-    кодогена TS-клиента и zod-схем (ADR-0002, docs/IDP_MVP_plan.md, Этап 1).
-    В этом изменении — КАРКАС: только служебные эндпоинты, без доменных
-    операций (создание/владельцы/перенос/удаление — отдельные changes).
+    кодогена TS-клиента и zod-схем (ADR-0002, ADR-0009, docs/IDP_MVP_plan.md,
+    Этап 1 и Этап 3). Доменные операции сценария «Создание сервиса» — поверх
+    gRPC-контракта projectsv1 (CreateService/GetService/ListServices).
+    BREAKING относительно версии 0.1.0: каркасный `GET /services` заменён
+    проектно-скоупленным ресурсом `GET /projects/{project}/services`.
 servers:
   - url: /api
 paths:
@@ -21,20 +23,113 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
-  /services:
+  /projects/{project}/services:
     get:
       operationId: listServices
-      summary: Список сервисов (каркас, доменная логика — позже)
+      summary: Список сервисов проекта с keyset-пагинацией
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - name: page_size
+          in: query
+          required: false
+          description: >
+            Желаемый размер страницы; сервер клампит к допустимому пределу.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: page_token
+          in: query
+          required: false
+          description: >
+            Непрозрачный курсор продолжения из предыдущего ответа; пустой —
+            с начала выборки.
+          schema:
+            type: string
       responses:
         "200":
-          description: Список сервисов
+          description: Страница сервисов проекта
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ServiceSummary"
+                $ref: "#/components/schemas/ServiceList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      operationId: createService
+      summary: Запуск создания сервиса в проекте
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceRequest"
+      responses:
+        "201":
+          description: Создание запущено, запись зафиксирована со статусом creating
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateServiceResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /projects/{project}/services/{name}:
+    get:
+      operationId: getService
+      summary: Чтение статуса одного сервиса проекта
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      responses:
+        "200":
+          description: Текущее состояние сервиса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
+  parameters:
+    ProjectPath:
+      name: project
+      in: path
+      required: true
+      description: Идентификатор проекта-владельца.
+      schema:
+        type: string
+        minLength: 1
+    ServiceNamePath:
+      name: name
+      in: path
+      required: true
+      description: Имя сервиса внутри проекта.
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    BadRequest:
+      description: Некорректный запрос (валидация входных данных)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Конфликт состояния (например, имя сервиса уже занято)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthStatus:
       type: object
@@ -57,3 +152,40 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/ServiceStatus"
+    ServiceList:
+      type: object
+      required: [services, next_page_token]
+      properties:
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceSummary"
+        next_page_token:
+          type: string
+          description: Курсор следующей страницы; пустой — конец выборки.
+    CreateServiceRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Имя создаваемого сервиса внутри проекта.
+    CreateServiceResult:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Идентификатор созданной записи каталога.
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: >
+            Стабильное сообщение об ошибке для клиента. Внутренние детали
+            (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера.

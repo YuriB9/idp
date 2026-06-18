@@ -1,26 +1,49 @@
 {
   "name": "@idp/web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Каркас портала IDP: кодоген TS-клиента и zod-схем из OpenAPI периметра.",
+  "description": "Портал IDP: SPA сценария «Создание сервиса» (список/форма/прогресс) и кодоген TS-клиента и zod-схем из OpenAPI периметра.",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
     "gen:types": "openapi-typescript ../openapi/openapi.yaml -o src/api/schema.ts",
     "gen:zod": "openapi-zod-client ../openapi/openapi.yaml -o src/api/client.ts --export-schemas",
     "gen": "npm run gen:types && npm run gen:zod",
     "gen:check": "npm run gen && git diff --exit-code src/api"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.1",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.1.0",
+    "@testing-library/user-event": "14.5.2",
+    "@types/node": "25.9.3",
+    "@types/react": "19.0.2",
+    "@types/react-dom": "19.0.2",
+    "@vitejs/plugin-react": "4.3.4",
+    "jsdom": "25.0.1",
     "openapi-typescript": "7.13.0",
     "openapi-zod-client": "1.18.3",
-    "typescript": "5.9.3"
+    "tailwindcss": "4.3.1",
+    "typescript": "5.9.3",
+    "vite": "6.0.7",
+    "vitest": "2.1.8"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "5.2.9",
+    "@hookform/resolvers": "3.10.0",
     "@tanstack/react-query": "5.101.0",
     "@zodios/core": "10.9.6",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.21.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-hook-form": "7.79.0",
+    "react-router-dom": "7.1.1",
+    "tailwind-merge": "3.6.0",
     "zod": "3.23.8"
   }
 }

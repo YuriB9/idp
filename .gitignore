@@ -8,6 +8,8 @@
 # Node
 node_modules/
 web/dist/
+# Инкрементальная сборка TypeScript
+*.tsbuildinfo
 
 # Локальные окружения
 .env

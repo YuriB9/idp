@@ -1,10 +1,13 @@
 # Многоэтапная сборка сервиса devinfra-worker. Контекст сборки — КОРЕНЬ репозитория
-# (нужен модуль ./pkg, на который ссылается replace в go.mod).
+# (нужны модули ./pkg и ./services/projects, на которые ссылаются replace в go.mod).
 #   docker build -f services/devinfra-worker/Dockerfile -t idp-devinfra-worker .
 FROM golang:1.26.4 AS build
 WORKDIR /src
-# Сначала модули pkg и сервиса — для кэширования слоёв.
+# Сначала модули pkg и сервиса — для кэширования слоёв. Воркер переиспользует
+# доменный код каталога (provisioning/catalog), на который ссылается replace
+# `=> ../projects` в go.mod, поэтому модуль projects тоже копируем в контекст.
 COPY pkg/ ./pkg/
+COPY services/projects/ ./services/projects/
 COPY services/devinfra-worker/ ./services/devinfra-worker/
 WORKDIR /src/services/devinfra-worker
 ENV GOWORK=off CGO_ENABLED=0

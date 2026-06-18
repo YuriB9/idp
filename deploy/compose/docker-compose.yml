@@ -1,6 +1,7 @@
 # Локальный стенд платформы IDP (docs/IDP_MVP_plan.md, Этап 1).
 # Поднимает: Keycloak, Oauth2-Proxy, Postgres x2 (projects/idm), DragonflyDB,
-# Temporal + UI (со своим Postgres), скелеты сервисов и моки GitLab/Vault/Harbor.
+# Temporal + UI (со своим Postgres), сервисы платформы, портал (SPA на :3000)
+# и моки GitLab/Vault/Harbor.
 #
 # Запуск из корня репозитория:
 #   docker compose -f deploy/compose/docker-compose.yml up --build
@@ -9,7 +10,7 @@ name: idp
 services:
   # --- Идентичность и периметр ---
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.5.2
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -33,7 +34,7 @@ services:
 
   # --- Хранилища ---
   postgres-projects:
-    image: postgres:17-alpine
+    image: postgres:17.10-alpine3.23
     environment:
       POSTGRES_USER: projects
       POSTGRES_PASSWORD: projects
@@ -47,7 +48,7 @@ services:
       - "5432:5432"
 
   postgres-idm:
-    image: postgres:17-alpine
+    image: postgres:17.10-alpine3.23
     environment:
       POSTGRES_USER: idm
       POSTGRES_PASSWORD: idm
@@ -73,7 +74,7 @@ services:
 
   # --- Temporal (со своим Postgres) ---
   temporal-postgresql:
-    image: postgres:17-alpine
+    image: postgres:17.10-alpine3.23
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal
@@ -160,6 +161,23 @@ services:
     ports:
       - "8081:8080"
 
+  # Портал (SPA) — Vite dev-сервер на :3000, проксирует /api на gateway.
+  # Same-origin прокси снимает CORS на стороне браузера (см. ADR-0009,
+  # design.md). Локально периметр с AUTH_DISABLED, поэтому портал ходит на
+  # gateway напрямую (oauth2-proxy остаётся для проверки OIDC-потока отдельно).
+  web:
+    build:
+      context: ../../web
+      dockerfile: Dockerfile
+    environment:
+      # Цель прокси /api внутри compose-сети — порт контейнера gateway (:8080).
+      GATEWAY_URL: "http://gateway:8080"
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "3000:3000"
+
   idm:
     build:
       context: ../..
@@ -177,6 +195,19 @@ services:
       dragonfly:
         condition: service_started
 
+  # Одноразовый мигратор: применяет схему каталога (таблица services) к
+  # postgres-projects до старта projects/worker. Завершается с кодом 0.
+  migrate-projects:
+    build:
+      context: ../..
+      dockerfile: services/projects/migrate.Dockerfile
+    environment:
+      PROJECTS_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
+    restart: "no"
+    depends_on:
+      postgres-projects:
+        condition: service_healthy
+
   projects:
     build:
       context: ../..
@@ -192,6 +223,8 @@ services:
     depends_on:
       postgres-projects:
         condition: service_healthy
+      migrate-projects:
+        condition: service_completed_successfully
       temporal:
         condition: service_healthy
 
@@ -218,6 +251,8 @@ services:
     depends_on:
       postgres-projects:
         condition: service_healthy
+      migrate-projects:
+        condition: service_completed_successfully
       temporal:
         condition: service_healthy
       mock-gitlab:
