@@ -62,6 +62,10 @@ services:
 
   dragonfly:
     image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.23.2
+    # Локально ограничиваем потоки и maxmemory: по умолчанию Dragonfly берёт по
+    # числу ядер (напр. 8 io-потоков → требует 2GiB) и падает на машинах с малым
+    # объёмом RAM. Для dev достаточно 2 потоков и 1GiB.
+    command: ["--proactor_threads=2", "--maxmemory=1gb"]
     ulimits:
       memlock: -1
     ports:
