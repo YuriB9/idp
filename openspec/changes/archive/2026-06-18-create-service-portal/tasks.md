@@ -43,5 +43,5 @@
 ## 7. Завершение
 
 - [x] 7.1 Убедиться, что комментарии в коде (Go/TS/TSX/конфиги) только на русском
-- [ ] 7.2 Прогнать локально lint, тесты модулей, `gen:check`; открыть PR; добиться зелёного CI (gen:check, golangci-lint, govulncheck, integration)
-- [ ] 7.3 После merge ветки в master — запустить `/opsx:archive`
+- [x] 7.2 Прогнать локально lint, тесты модулей, `gen:check`; открыть PR; добиться зелёного CI (gen:check, golangci-lint, govulncheck, integration)
+- [x] 7.3 После merge ветки в master — запустить `/opsx:archive`
