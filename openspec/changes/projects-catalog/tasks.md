@@ -53,4 +53,4 @@
 
 - [x] 9.1 Прогнать `go build ./...`, `go test ./...` (дефолт) и линтер golangci-lint; integration-прогон с тегом при доступной БД
 - [x] 9.2 Проверить, что все комментарии в новом коде — на русском; `git diff --exit-code` после `make proto` пуст
-- [ ] 9.3 Открыть PR из `change/projects-catalog`, добиться зелёного CI (включая integration-джоб); после merge — `/opsx:archive`
+- [x] 9.3 Открыть PR из `change/projects-catalog`, добиться зелёного CI (включая integration-джоб); после merge — `/opsx:archive`
