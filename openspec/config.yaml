@@ -12,10 +12,13 @@ context: |
     - Go 1.26, монорепо на go.work: ./pkg (общее) + модуль на сервис
       (services/gateway, services/idm, services/projects, services/devinfra-worker)
       + ./tests/e2e + изолированный ./tools (вне go.work, GOWORK=off). Frontend — ./web.
+      Пинованные бинари инструментов доступны в /home/yurib/IDP/tools/bin
+      (buf, protoc-gen-go, protoc-gen-go-grpc, golangci-lint, goose) — собираются
+      через `make tools`; запускать с GOWORK=off либо добавив tools/bin в PATH.
     - Frontend: React 19 + Vite + TypeScript + TanStack Query + react-router;
       формы — react-hook-form + zod (схема = источник правды); рантайм-валидация
       ответов API через zod .parse.
-    - Оркестрация: Temporal (НЕ голый AMQP). Сервис проектов = API + Temporal worker
+    - Оркестрация: Temporal. Сервис проектов = API + Temporal worker
       (раздельные процессы). Внешние вызовы — activities с RetryPolicy/таймаутами/
       heartbeat; non-retryable ApplicationError → ветка компенсации (Saga).
     - Внутренний транспорт: gRPC/protobuf с первого дня (.proto = контракт).
