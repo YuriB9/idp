@@ -1,0 +1,195 @@
+# Локальный стенд платформы IDP (docs/IDP_MVP_plan.md, Этап 1).
+# Поднимает: Keycloak, Oauth2-Proxy, Postgres x2 (projects/idm), DragonflyDB,
+# Temporal + UI (со своим Postgres), скелеты сервисов и моки GitLab/Vault/Harbor.
+#
+# Запуск из корня репозитория:
+#   docker compose -f deploy/compose/docker-compose.yml up --build
+name: idp
+
+services:
+  # --- Идентичность и периметр ---
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ../keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8088:8080"
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    command: ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg"]
+    volumes:
+      - ../oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+    depends_on:
+      - keycloak
+      - gateway
+    ports:
+      - "4180:4180"
+
+  # --- Хранилища ---
+  postgres-projects:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: projects
+      POSTGRES_PASSWORD: projects
+      POSTGRES_DB: projects
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projects"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  postgres-idm:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: idm
+      POSTGRES_PASSWORD: idm
+      POSTGRES_DB: idm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5433:5432"
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.23.2
+    ulimits:
+      memlock: -1
+    ports:
+      - "6379:6379"
+
+  # --- Temporal (со своим Postgres) ---
+  temporal-postgresql:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgresql
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    depends_on:
+      - temporal
+    ports:
+      - "8080:8080"
+
+  # --- Моки управляемых систем (GitLab/Vault/Harbor) ---
+  mock-gitlab:
+    image: wiremock/wiremock:3.9.1
+    command: ["--port", "8080", "--verbose"]
+    volumes:
+      - ../mocks/mappings:/home/wiremock/mappings:ro
+    ports:
+      - "9081:8080"
+
+  mock-vault:
+    image: wiremock/wiremock:3.9.1
+    command: ["--port", "8080", "--verbose"]
+    volumes:
+      - ../mocks/mappings:/home/wiremock/mappings:ro
+    ports:
+      - "9082:8080"
+
+  mock-harbor:
+    image: wiremock/wiremock:3.9.1
+    command: ["--port", "8080", "--verbose"]
+    volumes:
+      - ../mocks/mappings:/home/wiremock/mappings:ro
+    ports:
+      - "9083:8080"
+
+  # --- Сервисы платформы (скелеты) ---
+  gateway:
+    build:
+      context: ../..
+      dockerfile: services/gateway/Dockerfile
+    environment:
+      HTTP_ADDR: ":8080"
+      IDM_GRPC_ADDR: "idm:9090"
+      PROJECTS_GRPC_ADDR: "projects:9090"
+      # Локально периметр аутентифицирует Oauth2-Proxy; проверку JWT в сервисе
+      # отключаем явным флагом (единственный разрешённый способ). В проде —
+      # реальный JWKS_URL (https), fail-closed.
+      AUTH_DISABLED: "true"
+    depends_on:
+      - idm
+      - projects
+    ports:
+      - "8081:8080"
+
+  idm:
+    build:
+      context: ../..
+      dockerfile: services/idm/Dockerfile
+    environment:
+      GRPC_ADDR: ":9090"
+      HTTP_ADDR: ":8081"
+      AUTH_DISABLED: "true"
+      PG_DSN: "postgres://idm:idm@postgres-idm:5432/idm?sslmode=disable"
+      REDIS_ADDR: "dragonfly:6379"
+    depends_on:
+      - postgres-idm
+      - dragonfly
+
+  projects:
+    build:
+      context: ../..
+      dockerfile: services/projects/Dockerfile
+    environment:
+      GRPC_ADDR: ":9090"
+      HTTP_ADDR: ":8082"
+      AUTH_DISABLED: "true"
+      PG_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
+      TEMPORAL_HOSTPORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+    depends_on:
+      - postgres-projects
+      - temporal
+
+  devinfra-worker:
+    build:
+      context: ../..
+      dockerfile: services/devinfra-worker/Dockerfile
+    environment:
+      HTTP_ADDR: ":8083"
+      TEMPORAL_HOSTPORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+      TEMPORAL_TASK_QUEUE: "devinfra"
+      GITLAB_BASE_URL: "http://mock-gitlab:8080"
+      VAULT_BASE_URL: "http://mock-vault:8080"
+      HARBOR_BASE_URL: "http://mock-harbor:8080"
+    depends_on:
+      - temporal
+      - mock-gitlab
+      - mock-vault
+      - mock-harbor

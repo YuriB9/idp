@@ -1,0 +1,40 @@
+{
+  "realm": "idp",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "platform-user", "description": "Базовый пользователь портала IDP" },
+      { "name": "platform-admin", "description": "Администратор платформы IDP" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "idp-portal",
+      "name": "IDP Developer Portal",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "idp-portal-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:4180/oauth2/callback"],
+      "webOrigins": ["http://localhost:4180"]
+    }
+  ],
+  "users": [
+    {
+      "username": "dev",
+      "enabled": true,
+      "email": "dev@example.com",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "User",
+      "credentials": [
+        { "type": "password", "value": "dev", "temporary": false }
+      ],
+      "realmRoles": ["platform-user"]
+    }
+  ]
+}

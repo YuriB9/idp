@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+// Пакет idm.v1 — контракт сервиса IDM (права/роли). Источник правды для
+// внутренних вызовов gateway↔idm (ADR-0002). В MVP — минимальный RBAC через
+// CheckAccess; интерфейс целевой, наполнение ролей — позже.
+package idm.v1;
+
+option go_package = "github.com/YuriB9/idp/pkg/api/idm/v1;idmv1";
+
+// AccessService отвечает на вопрос «можно ли субъекту выполнить действие над
+// ресурсом».
+service AccessService {
+  // CheckAccess проверяет право субъекта на действие над ресурсом.
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+}
+
+message CheckAccessRequest {
+  // subject — идентификатор пользователя/сервиса (например, sub из JWT).
+  string subject = 1;
+  // resource — целевой ресурс (например, "project:acme").
+  string resource = 2;
+  // action — действие (например, "create", "transfer", "decommission").
+  string action = 3;
+}
+
+message CheckAccessResponse {
+  // allowed — итоговое решение политики.
+  bool allowed = 1;
+  // reason — машинно-читаемая причина отказа (для логов/отладки), необязательна.
+  string reason = 2;
+}

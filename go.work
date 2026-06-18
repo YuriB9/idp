@@ -1,0 +1,13 @@
+go 1.26.4
+
+// Изолированный модуль ./tools НАМЕРЕННО не входит в workspace.
+// Инструменты кодогена/линтинга запускаются с GOWORK=off, чтобы их
+// зависимости не протекали в графы сервисов (см. docs/adr/0006).
+use (
+	./pkg
+	./services/devinfra-worker
+	./services/gateway
+	./services/idm
+	./services/projects
+	./tests/e2e
+)

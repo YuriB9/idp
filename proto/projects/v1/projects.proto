@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+// Пакет projects.v1 — контракт сервиса управления проектами для внутренних
+// вызовов gateway↔projects (ADR-0002). В этом изменении — КАРКАС: типы и
+// сигнатуры без доменной реализации (создание/перенос/удаление — отдельные
+// changes). Статусы сервиса перечислены здесь как контракт (ADR-0004).
+package projects.v1;
+
+option go_package = "github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1";
+
+// ServiceStatus — статус создаваемой единицы (сервиса) в каталоге.
+// Zero-value намеренно UNSPECIFIED (не маппить незнакомое в дефолт молча).
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED = 0;
+  SERVICE_STATUS_CREATING = 1;
+  SERVICE_STATUS_ACTIVE = 2;
+  SERVICE_STATUS_DECOMMISSIONED = 3;
+  SERVICE_STATUS_FAILED = 4;
+}
+
+// ProjectsService — каркас интерфейса. Методы доменных user stories будут
+// добавлены последующими changes; здесь — только чтение статуса.
+service ProjectsService {
+  // GetService возвращает текущее состояние сервиса из каталога.
+  rpc GetService(GetServiceRequest) returns (GetServiceResponse);
+}
+
+message GetServiceRequest {
+  // project — идентификатор проекта.
+  string project = 1;
+  // name — имя сервиса внутри проекта.
+  string name = 2;
+}
+
+message GetServiceResponse {
+  string project = 1;
+  string name = 2;
+  ServiceStatus status = 3;
+}

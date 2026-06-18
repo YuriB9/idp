@@ -1,0 +1,18 @@
+# Скомпилированные бинарники инструментов (собираются через `make tools`)
+/tools/bin/
+
+# Сборки сервисов
+/bin/
+*.exe
+
+# Node
+node_modules/
+web/dist/
+
+# Локальные окружения
+.env
+*.local
+
+# IDE
+.idea/
+.vscode/
