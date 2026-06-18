@@ -1,0 +1,33 @@
+# service-contracts Specification
+
+## Purpose
+TBD - created by archiving change foundation-and-pkg. Update Purpose after archive.
+## Requirements
+### Requirement: gRPC-контракты внутренних вызовов
+
+В репозитории ДОЛЖНЫ (MUST) быть `.proto`-файлы как источник правды для внутренних вызовов gateway↔idm и gateway↔projects, с кодогеном Go-стабов. Каркас включает IDM `CheckAccess(user, resource, action)` и интерфейс сервиса проектов (без доменной реализации).
+
+#### Scenario: Кодоген Go-стабов воспроизводим
+
+- **WHEN** запускается генерация из `.proto` инструментами из `./tools`
+- **THEN** сгенерированные Go-стабы соответствуют `.proto`, и `git diff --exit-code` после генерации пуст
+
+#### Scenario: Изменение .proto помечается BREAKING
+
+- **WHEN** в `.proto` вносится несовместимое по wire изменение
+- **THEN** оно помечается как **BREAKING** в описании change
+
+### Requirement: OpenAPI периметра и TS-клиент
+
+В репозитории ДОЛЖНА (MUST) быть OpenAPI-спецификация периметра (портал↔gateway) с кодогеном TypeScript-клиента и zod-схем для `./web`.
+
+#### Scenario: Кодоген TS-клиента воспроизводим
+
+- **WHEN** запускается генерация клиента из OpenAPI
+- **THEN** сгенерированные TS-клиент и zod-схемы соответствуют спецификации, повторный запуск не даёт diff
+
+#### Scenario: Рассинхрон контракта всплывает при валидации ответа
+
+- **WHEN** ответ API не соответствует zod-схеме, сгенерированной из OpenAPI
+- **THEN** `.parse` на стороне портала выбрасывает ошибку, делая дрейф контракта явным
+
