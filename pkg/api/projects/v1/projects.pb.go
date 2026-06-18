@@ -83,6 +83,70 @@ func (ServiceStatus) EnumDescriptor() ([]byte, []int) {
 	return file_projects_v1_projects_proto_rawDescGZIP(), []int{0}
 }
 
+// Service — запись каталога (единица-сервис).
+type Service struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project — идентификатор проекта-владельца.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// name — имя сервиса внутри проекта.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// status — текущий статус записи.
+	Status        ServiceStatus `protobuf:"varint,3,opt,name=status,proto3,enum=projects.v1.ServiceStatus" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Service) Reset() {
+	*x = Service{}
+	mi := &file_projects_v1_projects_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Service) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Service) ProtoMessage() {}
+
+func (x *Service) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Service.ProtoReflect.Descriptor instead.
+func (*Service) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Service) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *Service) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Service) GetStatus() ServiceStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ServiceStatus_SERVICE_STATUS_UNSPECIFIED
+}
+
 type GetServiceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// project — идентификатор проекта.
@@ -95,7 +159,7 @@ type GetServiceRequest struct {
 
 func (x *GetServiceRequest) Reset() {
 	*x = GetServiceRequest{}
-	mi := &file_projects_v1_projects_proto_msgTypes[0]
+	mi := &file_projects_v1_projects_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -107,7 +171,7 @@ func (x *GetServiceRequest) String() string {
 func (*GetServiceRequest) ProtoMessage() {}
 
 func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_projects_v1_projects_proto_msgTypes[0]
+	mi := &file_projects_v1_projects_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -120,7 +184,7 @@ func (x *GetServiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceRequest.ProtoReflect.Descriptor instead.
 func (*GetServiceRequest) Descriptor() ([]byte, []int) {
-	return file_projects_v1_projects_proto_rawDescGZIP(), []int{0}
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetServiceRequest) GetProject() string {
@@ -148,7 +212,7 @@ type GetServiceResponse struct {
 
 func (x *GetServiceResponse) Reset() {
 	*x = GetServiceResponse{}
-	mi := &file_projects_v1_projects_proto_msgTypes[1]
+	mi := &file_projects_v1_projects_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -160,7 +224,7 @@ func (x *GetServiceResponse) String() string {
 func (*GetServiceResponse) ProtoMessage() {}
 
 func (x *GetServiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_projects_v1_projects_proto_msgTypes[1]
+	mi := &file_projects_v1_projects_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -173,7 +237,7 @@ func (x *GetServiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetServiceResponse.ProtoReflect.Descriptor instead.
 func (*GetServiceResponse) Descriptor() ([]byte, []int) {
-	return file_projects_v1_projects_proto_rawDescGZIP(), []int{1}
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetServiceResponse) GetProject() string {
@@ -197,27 +261,158 @@ func (x *GetServiceResponse) GetStatus() ServiceStatus {
 	return ServiceStatus_SERVICE_STATUS_UNSPECIFIED
 }
 
+type ListServicesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project — идентификатор проекта, чьи сервисы перечисляются.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// page_size — желаемый размер страницы; сервер клампит к допустимому пределу.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// page_token — непрозрачный курсор продолжения из предыдущего ответа;
+	// пустой — с начала.
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListServicesRequest) Reset() {
+	*x = ListServicesRequest{}
+	mi := &file_projects_v1_projects_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListServicesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListServicesRequest) ProtoMessage() {}
+
+func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
+func (*ListServicesRequest) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListServicesRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *ListServicesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListServicesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+type ListServicesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// services — страница записей в порядке (created_at, id).
+	Services []*Service `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	// next_page_token — курсор следующей страницы; пустой — конец выборки.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListServicesResponse) Reset() {
+	*x = ListServicesResponse{}
+	mi := &file_projects_v1_projects_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListServicesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListServicesResponse) ProtoMessage() {}
+
+func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
+func (*ListServicesResponse) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListServicesResponse) GetServices() []*Service {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+func (x *ListServicesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
 var File_projects_v1_projects_proto protoreflect.FileDescriptor
 
 const file_projects_v1_projects_proto_rawDesc = "" +
 	"\n" +
-	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"A\n" +
+	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"k\n" +
+	"\aService\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"A\n" +
 	"\x11GetServiceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"v\n" +
 	"\x12GetServiceResponse\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
-	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status*\xa5\x01\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"k\n" +
+	"\x13ListServicesRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"p\n" +
+	"\x14ListServicesResponse\x120\n" +
+	"\bservices\x18\x01 \x03(\v2\x14.projects.v1.ServiceR\bservices\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*\xa5\x01\n" +
 	"\rServiceStatus\x12\x1e\n" +
 	"\x1aSERVICE_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17SERVICE_STATUS_CREATING\x10\x01\x12\x19\n" +
 	"\x15SERVICE_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSERVICE_STATUS_DECOMMISSIONED\x10\x03\x12\x19\n" +
-	"\x15SERVICE_STATUS_FAILED\x10\x042`\n" +
+	"\x15SERVICE_STATUS_FAILED\x10\x042\xb5\x01\n" +
 	"\x0fProjectsService\x12M\n" +
 	"\n" +
-	"GetService\x12\x1e.projects.v1.GetServiceRequest\x1a\x1f.projects.v1.GetServiceResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
+	"GetService\x12\x1e.projects.v1.GetServiceRequest\x1a\x1f.projects.v1.GetServiceResponse\x12S\n" +
+	"\fListServices\x12 .projects.v1.ListServicesRequest\x1a!.projects.v1.ListServicesResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
 
 var (
 	file_projects_v1_projects_proto_rawDescOnce sync.Once
@@ -232,21 +427,28 @@ func file_projects_v1_projects_proto_rawDescGZIP() []byte {
 }
 
 var file_projects_v1_projects_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_projects_v1_projects_proto_goTypes = []any{
-	(ServiceStatus)(0),         // 0: projects.v1.ServiceStatus
-	(*GetServiceRequest)(nil),  // 1: projects.v1.GetServiceRequest
-	(*GetServiceResponse)(nil), // 2: projects.v1.GetServiceResponse
+	(ServiceStatus)(0),           // 0: projects.v1.ServiceStatus
+	(*Service)(nil),              // 1: projects.v1.Service
+	(*GetServiceRequest)(nil),    // 2: projects.v1.GetServiceRequest
+	(*GetServiceResponse)(nil),   // 3: projects.v1.GetServiceResponse
+	(*ListServicesRequest)(nil),  // 4: projects.v1.ListServicesRequest
+	(*ListServicesResponse)(nil), // 5: projects.v1.ListServicesResponse
 }
 var file_projects_v1_projects_proto_depIdxs = []int32{
-	0, // 0: projects.v1.GetServiceResponse.status:type_name -> projects.v1.ServiceStatus
-	1, // 1: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
-	2, // 2: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // 0: projects.v1.Service.status:type_name -> projects.v1.ServiceStatus
+	0, // 1: projects.v1.GetServiceResponse.status:type_name -> projects.v1.ServiceStatus
+	1, // 2: projects.v1.ListServicesResponse.services:type_name -> projects.v1.Service
+	2, // 3: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
+	4, // 4: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
+	3, // 5: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
+	5, // 6: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
+	5, // [5:7] is the sub-list for method output_type
+	3, // [3:5] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_projects_v1_projects_proto_init() }
@@ -260,7 +462,7 @@ func file_projects_v1_projects_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_projects_v1_projects_proto_rawDesc), len(file_projects_v1_projects_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

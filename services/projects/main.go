@@ -1,13 +1,16 @@
 // Command projects — сервис управления проектами: gRPC ProjectsService и
 // Temporal Client (ADR-0001, ADR-0002). API и Temporal worker — раздельные
-// процессы (worker — в services/devinfra-worker). В этом изменении — скелет:
-// gRPC-сервер, Temporal-клиент и health, без доменной логики и workflow.
+// процессы (worker — в services/devinfra-worker). В этом изменении подключён
+// доменный слой каталога: Postgres-репозиторий с guarded-CAS-переходами,
+// usecase и gRPC-реализация чтения; Temporal workflow — отдельный change.
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -16,27 +19,19 @@ import (
 	"go.temporal.io/sdk/client"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
 	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/config"
+	"github.com/YuriB9/idp/pkg/db"
 	"github.com/YuriB9/idp/pkg/grpcx"
 	"github.com/YuriB9/idp/pkg/httpserver"
 	"github.com/YuriB9/idp/pkg/logger"
 	"github.com/YuriB9/idp/pkg/temporallog"
+	"github.com/YuriB9/idp/services/projects/internal/grpcapi"
+	"github.com/YuriB9/idp/services/projects/internal/repository"
+	"github.com/YuriB9/idp/services/projects/internal/usecase"
 )
-
-// projectsServer — скелет реализации ProjectsService.
-type projectsServer struct {
-	projectsv1.UnimplementedProjectsServiceServer
-}
-
-func (s *projectsServer) GetService(_ context.Context, _ *projectsv1.GetServiceRequest) (*projectsv1.GetServiceResponse, error) {
-	// Каркас: доменная логика каталога — отдельный change.
-	return nil, status.Error(codes.Unimplemented, "GetService not implemented yet")
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -52,6 +47,28 @@ func run() error {
 	log := logger.New(logger.Options{Level: config.String("LOG_LEVEL", "info"), JSON: true})
 	verifier := auth.MustVerifierFromEnv(ctx, log)
 
+	// Пул Postgres каталога проектов: конфигурация обязательна (docs БЛОК 4).
+	maxConns, err := config.Int("PG_MAX_CONNS", 10)
+	if err != nil {
+		return err
+	}
+	if maxConns <= 0 || maxConns > math.MaxInt32 {
+		return fmt.Errorf("projects: PG_MAX_CONNS вне допустимого диапазона: %d", maxConns)
+	}
+	pool, err := db.NewPool(ctx, db.PoolConfig{
+		DSN:      config.String("PG_DSN", "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"),
+		MaxConns: int32(maxConns),
+	})
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	// Сборка доменных слоёв: repository → usecase → gRPC-транспорт.
+	repo := repository.New(pool)
+	catalog := usecase.New(repo)
+	projectsAPI := grpcapi.New(catalog, log)
+
 	// Lazy-клиент Temporal: не падаем на старте, если сервер недоступен;
 	// готовность отражается в /readyz через CheckHealth.
 	temporalClient, err := client.NewLazyClient(client.Options{
@@ -65,7 +82,7 @@ func run() error {
 	defer temporalClient.Close()
 
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
-	projectsv1.RegisterProjectsServiceServer(grpcSrv, &projectsServer{})
+	projectsv1.RegisterProjectsServiceServer(grpcSrv, projectsAPI)
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {
@@ -76,6 +93,11 @@ func run() error {
 		Addr:   config.String("HTTP_ADDR", ":8082"),
 		Logger: log,
 		ReadinessChecks: []httpserver.ReadinessCheck{
+			{
+				// Реальный пинг Postgres: k8s не должен слать трафик при недоступной БД.
+				Name:  "postgres",
+				Check: pool.Ping,
+			},
 			{
 				Name: "temporal",
 				Check: func(ctx context.Context) error {

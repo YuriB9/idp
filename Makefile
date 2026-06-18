@@ -5,13 +5,25 @@
 MODULES := pkg services/gateway services/idm services/projects services/devinfra-worker tests/e2e
 TOOLS_BIN := $(CURDIR)/tools/bin
 
-.PHONY: tools proto openapi gen test lint tidy tidy-check
+# DSN каталога проектов для миграций; переопределяется из окружения.
+PROJECTS_DSN ?= postgres://projects:projects@localhost:5432/projects?sslmode=disable
+PROJECTS_MIGRATIONS := $(CURDIR)/services/projects/migrations
+# GOOSE_CMD — команда goose (up|down|status|...).
+GOOSE_CMD ?= up
+
+.PHONY: tools proto openapi gen test lint tidy tidy-check migrate-projects
 
 ## tools: собрать пинованные инструменты кодогена в tools/bin
 tools:
 	cd tools && GOWORK=off GOBIN=$(TOOLS_BIN) go build -o bin/buf github.com/bufbuild/buf/cmd/buf
 	cd tools && GOWORK=off GOBIN=$(TOOLS_BIN) go build -o bin/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
 	cd tools && GOWORK=off GOBIN=$(TOOLS_BIN) go build -o bin/protoc-gen-go-grpc google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	cd tools && GOWORK=off GOBIN=$(TOOLS_BIN) go build -o bin/goose github.com/pressly/goose/v3/cmd/goose
+
+## migrate-projects: применить миграции каталога проектов (goose, GOWORK=off).
+## Использование: make migrate-projects [GOOSE_CMD=up|down|status] [PROJECTS_DSN=...]
+migrate-projects: tools
+	$(TOOLS_BIN)/goose -dir $(PROJECTS_MIGRATIONS) postgres "$(PROJECTS_DSN)" $(GOOSE_CMD)
 
 ## proto: сгенерировать Go-стабы из .proto
 proto: tools
