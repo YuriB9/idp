@@ -1,0 +1,59 @@
+openapi: 3.1.0
+info:
+  title: IDP Perimeter API
+  version: 0.1.0
+  description: >
+    Контракт периметра (портал ↔ API-шлюз) платформы IDP. Источник правды для
+    кодогена TS-клиента и zod-схем (ADR-0002, docs/IDP_MVP_plan.md, Этап 1).
+    В этом изменении — КАРКАС: только служебные эндпоинты, без доменных
+    операций (создание/владельцы/перенос/удаление — отдельные changes).
+servers:
+  - url: /api
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness-проба периметра
+      responses:
+        "200":
+          description: Сервис жив
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /services:
+    get:
+      operationId: listServices
+      summary: Список сервисов (каркас, доменная логика — позже)
+      responses:
+        "200":
+          description: Список сервисов
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServiceSummary"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    ServiceStatus:
+      type: string
+      description: Статус сервиса в каталоге (ADR-0004).
+      enum: [creating, active, decommissioned, failed]
+    ServiceSummary:
+      type: object
+      required: [project, name, status]
+      properties:
+        project:
+          type: string
+        name:
+          type: string
+        status:
+          $ref: "#/components/schemas/ServiceStatus"

@@ -1,0 +1,20 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "urlPath": "/healthz" },
+      "response": {
+        "status": 200,
+        "jsonBody": { "status": "ok" },
+        "headers": { "Content-Type": "application/json" }
+      }
+    },
+    {
+      "request": { "method": "ANY", "urlPattern": "/.*" },
+      "response": {
+        "status": 200,
+        "jsonBody": { "mock": true },
+        "headers": { "Content-Type": "application/json" }
+      }
+    }
+  ]
+}

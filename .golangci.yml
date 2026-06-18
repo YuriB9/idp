@@ -1,0 +1,33 @@
+# Конфигурация golangci-lint (v2) для платформы IDP.
+# Набор линтеров зафиксирован в docs/IDP_MVP_plan.md (БЛОК 0).
+version: "2"
+
+linters:
+  enable:
+    - errcheck      # необработанные ошибки
+    - govet         # подозрительные конструкции
+    - staticcheck   # статанализ (+ gosimple/stylecheck в v2)
+    - revive        # стиль (вкл. package-comments)
+    - gosec         # безопасность
+    - bodyclose     # незакрытые HTTP response body
+    - sqlclosecheck # незакрытые sql.Rows/Stmt
+    - nilerr        # return nil при ненулевой ошибке
+    - errname       # именование sentinel-ошибок (ErrXxx)
+    - paralleltest  # t.Parallel() в тестах
+  settings:
+    revive:
+      rules:
+        - name: package-comments
+  exclusions:
+    generated: lax
+    rules:
+      # В тестах допускаем необработанные ошибки в вспомогательных вызовах.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

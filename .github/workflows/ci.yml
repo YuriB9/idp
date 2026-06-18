@@ -1,0 +1,142 @@
+# CI платформы IDP — БЛОК 0 (docs/IDP_MVP_plan.md): блокирующий с первого
+# коммита. Матрица по модулям go.work + govulncheck + codegen-check + integration.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.4"
+
+jobs:
+  test:
+    name: test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - pkg
+          - services/gateway
+          - services/idm
+          - services/projects
+          - services/devinfra-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test -race -shuffle=on
+        working-directory: ${{ matrix.module }}
+        run: go test -race -shuffle=on ./...
+
+  tidy:
+    name: go mod tidy --check (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - pkg
+          - services/gateway
+          - services/idm
+          - services/projects
+          - services/devinfra-worker
+          - tests/e2e
+          - tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: tidy and verify no diff
+        working-directory: ${{ matrix.module }}
+        env:
+          GOWORK: "off"
+        run: |
+          go mod tidy
+          git diff --exit-code
+
+  lint:
+    name: golangci-lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - pkg
+          - services/gateway
+          - services/idm
+          - services/projects
+          - services/devinfra-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+          working-directory: ${{ matrix.module }}
+
+  govulncheck:
+    name: govulncheck (blocking, ${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - pkg
+          - services/gateway
+          - services/idm
+          - services/projects
+          - services/devinfra-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: run govulncheck
+        working-directory: ${{ matrix.module }}
+        env:
+          GOWORK: "off"
+        run: govulncheck ./...
+
+  codegen-check:
+    name: codegen reproducibility (.proto + OpenAPI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: regenerate proto stubs
+        run: make proto
+      - name: regenerate OpenAPI TS client
+        run: |
+          cd web && npm ci
+          npm run gen
+      - name: verify no diff
+        run: git diff --exit-code
+
+  integration:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: build integration suite
+        working-directory: tests/e2e
+        run: go test -tags=integration -run TestPerimeter ./...
