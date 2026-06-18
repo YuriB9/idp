@@ -24,18 +24,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProjectsService_GetService_FullMethodName = "/projects.v1.ProjectsService/GetService"
+	ProjectsService_GetService_FullMethodName   = "/projects.v1.ProjectsService/GetService"
+	ProjectsService_ListServices_FullMethodName = "/projects.v1.ProjectsService/ListServices"
 )
 
 // ProjectsServiceClient is the client API for ProjectsService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// ProjectsService — каркас интерфейса. Методы доменных user stories будут
-// добавлены последующими changes; здесь — только чтение статуса.
+// ProjectsService — интерфейс чтения каталога. Доменные user stories
+// (создание/перенос/удаление) добавляются последующими changes; здесь —
+// чтение одной записи и листинг с keyset-пагинацией.
 type ProjectsServiceClient interface {
 	// GetService возвращает текущее состояние сервиса из каталога.
+	// Отсутствие записи отображается в gRPC-статус NotFound.
 	GetService(ctx context.Context, in *GetServiceRequest, opts ...grpc.CallOption) (*GetServiceResponse, error)
+	// ListServices возвращает страницу сервисов проекта с keyset-пагинацией
+	// по непрозрачному курсору (сортировка по (created_at, id)).
+	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
 }
 
 type projectsServiceClient struct {
@@ -56,15 +62,30 @@ func (c *projectsServiceClient) GetService(ctx context.Context, in *GetServiceRe
 	return out, nil
 }
 
+func (c *projectsServiceClient) ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListServicesResponse)
+	err := c.cc.Invoke(ctx, ProjectsService_ListServices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProjectsServiceServer is the server API for ProjectsService service.
 // All implementations must embed UnimplementedProjectsServiceServer
 // for forward compatibility.
 //
-// ProjectsService — каркас интерфейса. Методы доменных user stories будут
-// добавлены последующими changes; здесь — только чтение статуса.
+// ProjectsService — интерфейс чтения каталога. Доменные user stories
+// (создание/перенос/удаление) добавляются последующими changes; здесь —
+// чтение одной записи и листинг с keyset-пагинацией.
 type ProjectsServiceServer interface {
 	// GetService возвращает текущее состояние сервиса из каталога.
+	// Отсутствие записи отображается в gRPC-статус NotFound.
 	GetService(context.Context, *GetServiceRequest) (*GetServiceResponse, error)
+	// ListServices возвращает страницу сервисов проекта с keyset-пагинацией
+	// по непрозрачному курсору (сортировка по (created_at, id)).
+	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
 	mustEmbedUnimplementedProjectsServiceServer()
 }
 
@@ -77,6 +98,9 @@ type UnimplementedProjectsServiceServer struct{}
 
 func (UnimplementedProjectsServiceServer) GetService(context.Context, *GetServiceRequest) (*GetServiceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetService not implemented")
+}
+func (UnimplementedProjectsServiceServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServices not implemented")
 }
 func (UnimplementedProjectsServiceServer) mustEmbedUnimplementedProjectsServiceServer() {}
 func (UnimplementedProjectsServiceServer) testEmbeddedByValue()                         {}
@@ -117,6 +141,24 @@ func _ProjectsService_GetService_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProjectsService_ListServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListServicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectsServiceServer).ListServices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectsService_ListServices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectsServiceServer).ListServices(ctx, req.(*ListServicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProjectsService_ServiceDesc is the grpc.ServiceDesc for ProjectsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -127,6 +169,10 @@ var ProjectsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetService",
 			Handler:    _ProjectsService_GetService_Handler,
+		},
+		{
+			MethodName: "ListServices",
+			Handler:    _ProjectsService_ListServices_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

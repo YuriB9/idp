@@ -18,11 +18,26 @@ enum ServiceStatus {
   SERVICE_STATUS_FAILED = 4;
 }
 
-// ProjectsService — каркас интерфейса. Методы доменных user stories будут
-// добавлены последующими changes; здесь — только чтение статуса.
+// ProjectsService — интерфейс чтения каталога. Доменные user stories
+// (создание/перенос/удаление) добавляются последующими changes; здесь —
+// чтение одной записи и листинг с keyset-пагинацией.
 service ProjectsService {
   // GetService возвращает текущее состояние сервиса из каталога.
+  // Отсутствие записи отображается в gRPC-статус NotFound.
   rpc GetService(GetServiceRequest) returns (GetServiceResponse);
+  // ListServices возвращает страницу сервисов проекта с keyset-пагинацией
+  // по непрозрачному курсору (сортировка по (created_at, id)).
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+}
+
+// Service — запись каталога (единица-сервис).
+message Service {
+  // project — идентификатор проекта-владельца.
+  string project = 1;
+  // name — имя сервиса внутри проекта.
+  string name = 2;
+  // status — текущий статус записи.
+  ServiceStatus status = 3;
 }
 
 message GetServiceRequest {
@@ -36,4 +51,21 @@ message GetServiceResponse {
   string project = 1;
   string name = 2;
   ServiceStatus status = 3;
+}
+
+message ListServicesRequest {
+  // project — идентификатор проекта, чьи сервисы перечисляются.
+  string project = 1;
+  // page_size — желаемый размер страницы; сервер клампит к допустимому пределу.
+  int32 page_size = 2;
+  // page_token — непрозрачный курсор продолжения из предыдущего ответа;
+  // пустой — с начала.
+  string page_token = 3;
+}
+
+message ListServicesResponse {
+  // services — страница записей в порядке (created_at, id).
+  repeated Service services = 1;
+  // next_page_token — курсор следующей страницы; пустой — конец выборки.
+  string next_page_token = 2;
 }
