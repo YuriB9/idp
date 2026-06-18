@@ -40,7 +40,8 @@ const (
 	// ActivityVaultTeardown — компенсация: удалить политики + AppRole.
 	ActivityVaultTeardown = "VaultTeardownAppRole"
 	// ActivityInjectSecrets — записать секреты Vault/Harbor в CI/CD-переменные GitLab.
-	ActivityInjectSecrets = "GitLabInjectSecrets"
+	// Это имя activity, а не учётные данные (подавляем ложное срабатывание gosec G101).
+	ActivityInjectSecrets = "GitLabInjectSecrets" //nolint:gosec // G101: имя activity, не секрет
 	// ActivityTransitionActive — guarded-CAS перевод записи CREATING→ACTIVE.
 	ActivityTransitionActive = "CatalogTransitionActive"
 	// ActivityTransitionFailed — guarded-CAS перевод записи CREATING→FAILED.
@@ -129,7 +130,7 @@ func activityOptions() workflow.ActivityOptions {
 func CreateServiceWorkflow(ctx workflow.Context, in CreateServiceInput) error {
 	ctx = workflow.WithActivityOptions(ctx, activityOptions())
 	log := workflow.GetLogger(ctx)
-	ref := ResourceRef{ServiceID: in.ServiceID, Project: in.Project, Name: in.Name}
+	ref := ResourceRef(in)
 
 	// comps — компенсации успешно выполненных шагов; запускаются в обратном
 	// порядке при фатальном сбое. Храним замыкания в памяти исполнения workflow.

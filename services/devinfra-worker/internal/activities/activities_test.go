@@ -21,8 +21,11 @@ type fakeStatus struct {
 	activated   string
 }
 
-func (f *fakeStatus) Activate(_ context.Context, id string) error { f.activated = id; return f.activateErr }
-func (f *fakeStatus) Fail(_ context.Context, id string) error     { return nil }
+func (f *fakeStatus) Activate(_ context.Context, id string) error {
+	f.activated = id
+	return f.activateErr
+}
+func (f *fakeStatus) Fail(_ context.Context, id string) error { return nil }
 
 // TestActivities_TransitionActiveOK: успешный переход делегируется в StatusStore.
 func TestActivities_TransitionActiveOK(t *testing.T) {
