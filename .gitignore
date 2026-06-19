@@ -18,3 +18,8 @@ web/dist/
 # IDE
 .idea/
 .vscode/
+
+# understand-anything
+.understand-anything/*
+!.understand-anything/.understandignore
+!.understand-anything/config.json
