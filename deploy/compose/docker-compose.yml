@@ -154,6 +154,9 @@ services:
       # отключаем явным флагом (единственный разрешённый способ). В проде —
       # реальный JWKS_URL (https), fail-closed.
       AUTH_DISABLED: "true"
+      # Субъект для disabled-режима: совпадает с засеянной демо-ролью IDM
+      # (subject_roles.subject), чтобы RBAC разрешал demo-user create в project:demo.
+      AUTH_DISABLED_SUBJECT: "demo-user"
     restart: unless-stopped
     depends_on:
       - idm
@@ -194,6 +197,21 @@ services:
         condition: service_healthy
       dragonfly:
         condition: service_started
+      migrate-idm:
+        condition: service_completed_successfully
+
+  # Одноразовый мигратор: применяет схему RBAC (роли/права/связи/привязки) и
+  # локальный seed демо-ролей к postgres-idm до старта idm. Завершается с кодом 0.
+  migrate-idm:
+    build:
+      context: ../..
+      dockerfile: services/idm/migrate.Dockerfile
+    environment:
+      IDM_DSN: "postgres://idm:idm@postgres-idm:5432/idm?sslmode=disable"
+    restart: "no"
+    depends_on:
+      postgres-idm:
+        condition: service_healthy
 
   # Одноразовый мигратор: применяет схему каталога (таблица services) к
   # postgres-projects до старта projects/worker. Завершается с кодом 0.
@@ -216,6 +234,10 @@ services:
       GRPC_ADDR: ":9090"
       HTTP_ADDR: ":8082"
       AUTH_DISABLED: "true"
+      # Субъект для disabled-режима: RBAC CheckAccess (defense-in-depth перед
+      # CreateService) видит demo-user, как и засеяно в IDM.
+      AUTH_DISABLED_SUBJECT: "demo-user"
+      IDM_GRPC_ADDR: "idm:9090"
       PG_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
       TEMPORAL_HOSTPORT: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
@@ -225,6 +247,8 @@ services:
         condition: service_healthy
       migrate-projects:
         condition: service_completed_successfully
+      idm:
+        condition: service_started
       temporal:
         condition: service_healthy
 

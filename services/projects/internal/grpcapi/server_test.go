@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
 	"github.com/YuriB9/idp/pkg/errs"
 	"github.com/YuriB9/idp/services/projects/internal/repository"
@@ -25,6 +27,8 @@ type fakeCatalog struct {
 	listErr   error
 	listItem  []repository.Service
 	listNext  string
+
+	createCalled bool
 }
 
 func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, error) {
@@ -36,12 +40,29 @@ func (f *fakeCatalog) List(context.Context, string, int, string) ([]repository.S
 }
 
 func (f *fakeCatalog) CreateService(context.Context, string, string) (repository.Service, error) {
+	f.createCalled = true
 	return f.svc, f.createErr
 }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// stubIDM — стаб AccessChecker (IDM): заранее заданное решение или ошибка.
+type stubIDM struct {
+	allowed bool
+	err     error
+}
+
+func (s stubIDM) CheckAccess(_ context.Context, _ *idmv1.CheckAccessRequest, _ ...grpc.CallOption) (*idmv1.CheckAccessResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &idmv1.CheckAccessResponse{Allowed: s.allowed}, nil
+}
+
+// allowIDM — стаб IDM, всегда разрешающий (для тестов, не проверяющих RBAC).
+func allowIDM() stubIDM { return stubIDM{allowed: true} }
 
 // TestGetServiceMapping покрывает маппинг результата/ошибок GetService в gRPC-коды.
 func TestGetServiceMapping(t *testing.T) {
@@ -85,7 +106,7 @@ func TestGetServiceMapping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			srv := New(tc.fake, discardLogger())
+			srv := New(tc.fake, allowIDM(), discardLogger())
 			resp, err := srv.GetService(context.Background(), tc.req)
 
 			if tc.wantCode == codes.OK {
@@ -148,7 +169,7 @@ func TestCreateServiceMapping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			srv := New(tc.fake, discardLogger())
+			srv := New(tc.fake, allowIDM(), discardLogger())
 			resp, err := srv.CreateService(context.Background(), tc.req)
 			if tc.wantCode == codes.OK {
 				if err != nil {
@@ -168,6 +189,42 @@ func TestCreateServiceMapping(t *testing.T) {
 			}
 			if st.Code() != tc.wantCode {
 				t.Fatalf("код = %v, ожидали %v", st.Code(), tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestCreateServiceRBAC проверяет defense-in-depth: отказ RBAC и недоступность
+// IDM маппятся в PermissionDenied, доменная запись каталога не выполняется,
+// внутренние детали наружу не раскрываются.
+func TestCreateServiceRBAC(t *testing.T) {
+	t.Parallel()
+
+	const secret = "внутренняя деталь: idm down"
+	tests := []struct {
+		name string
+		idm  stubIDM
+	}{
+		{name: "отказ RBAC → PermissionDenied", idm: stubIDM{allowed: false}},
+		{name: "IDM недоступен → PermissionDenied (fail-closed)", idm: stubIDM{err: status.Error(codes.Unavailable, secret)}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeCatalog{svc: repository.Service{ID: uuid.New(), Project: "p", Name: "n", Status: repository.StatusCreating}}
+			srv := New(fake, tc.idm, discardLogger())
+
+			_, err := srv.CreateService(context.Background(), &projectsv1.CreateServiceRequest{Project: "p", Name: "n"})
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.PermissionDenied {
+				t.Fatalf("ожидали PermissionDenied, получили %v", err)
+			}
+			if fake.createCalled {
+				t.Fatal("при отказе RBAC запись каталога не должна создаваться")
+			}
+			if strings.Contains(st.Message(), secret) {
+				t.Fatalf("сообщение клиенту утекло: %q", st.Message())
 			}
 		})
 	}

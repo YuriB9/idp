@@ -9,10 +9,13 @@ import (
 	"errors"
 	"log/slog"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
+	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/errs"
 	"github.com/YuriB9/idp/pkg/logger"
 	"github.com/YuriB9/idp/services/projects/internal/repository"
@@ -25,16 +28,23 @@ type Catalog interface {
 	CreateService(ctx context.Context, project, name string) (repository.Service, error)
 }
 
+// AccessChecker — зависимость от IDM (RBAC CheckAccess). Совместима с
+// сгенерированным idmv1.AccessServiceClient; в тестах подменяется стабом.
+type AccessChecker interface {
+	CheckAccess(ctx context.Context, in *idmv1.CheckAccessRequest, opts ...grpc.CallOption) (*idmv1.CheckAccessResponse, error)
+}
+
 // Server реализует projectsv1.ProjectsServiceServer.
 type Server struct {
 	projectsv1.UnimplementedProjectsServiceServer
 	catalog Catalog
+	idm     AccessChecker
 	log     *slog.Logger
 }
 
-// New создаёт gRPC-реализацию каталога.
-func New(catalog Catalog, log *slog.Logger) *Server {
-	return &Server{catalog: catalog, log: log}
+// New создаёт gRPC-реализацию каталога. idm — клиент RBAC IDM (CheckAccess).
+func New(catalog Catalog, idm AccessChecker, log *slog.Logger) *Server {
+	return &Server{catalog: catalog, idm: idm, log: log}
 }
 
 // GetService возвращает запись каталога. Отсутствие → codes.NotFound.
@@ -83,10 +93,11 @@ func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServic
 	if req.GetProject() == "" || req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "project и name обязательны")
 	}
-	// Граница RBAC: реальная проверка прав (IDM CheckAccess) — отдельный change
-	// idm-rbac-min. Здесь точка внедрения проверки намеренно оставлена заглушкой.
+	// RBAC (defense-in-depth): проверка права create через IDM CheckAccess до
+	// любых доменных записей и запуска workflow. authorize возвращает готовый
+	// gRPC-статус PermissionDenied — наружу без раскрытия деталей.
 	if err := s.authorize(ctx, req.GetProject()); err != nil {
-		return nil, s.mapError(ctx, "CreateService", err)
+		return nil, err
 	}
 	svc, err := s.catalog.CreateService(ctx, req.GetProject(), req.GetName())
 	if err != nil {
@@ -99,9 +110,27 @@ func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServic
 	return &projectsv1.CreateServiceResponse{Id: svc.ID.String(), Status: st}, nil
 }
 
-// authorize — заглушка проверки прав (граница для будущего IDM CheckAccess).
-// В MVP всегда разрешает; реальная реализация — change idm-rbac-min.
-func (s *Server) authorize(_ context.Context, _ string) error {
+// authorize проверяет право субъекта на создание сервиса в проекте через IDM
+// CheckAccess. subject берётся из claims (auth.ClaimsFromContext). Отказ ИЛИ
+// недоступность/ошибка IDM → PermissionDenied (fail-closed); внутренние детали
+// наружу не раскрываются (только лог по ключу slog "err").
+func (s *Server) authorize(ctx context.Context, project string) error {
+	var subject string
+	if claims, ok := auth.ClaimsFromContext(ctx); ok {
+		subject = claims.Subject
+	}
+	resp, err := s.idm.CheckAccess(ctx, &idmv1.CheckAccessRequest{
+		Subject:  subject,
+		Resource: "project:" + project,
+		Action:   "create",
+	})
+	if err != nil {
+		s.log.Warn("projects: RBAC недоступен/ошибка (fail-closed)", logger.Err(err))
+		return status.Error(codes.PermissionDenied, "доступ запрещён")
+	}
+	if !resp.GetAllowed() {
+		return status.Error(codes.PermissionDenied, "доступ запрещён")
+	}
 	return nil
 }
 

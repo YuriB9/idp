@@ -15,15 +15,46 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
+	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/logger"
 )
 
-// servicesAPI — обработчики ресурса сервисов периметра, держащие gRPC-клиент
-// каталога проектов. Создаётся один раз в main и навешивается на роутер.
+// servicesAPI — обработчики ресурса сервисов периметра, держащие gRPC-клиенты
+// каталога проектов и IDM (RBAC). Создаётся один раз в main и навешивается на
+// роутер.
 type servicesAPI struct {
 	client projectsv1.ProjectsServiceClient
+	idm    idmv1.AccessServiceClient
 	log    *slog.Logger
+}
+
+// authorize выполняет RBAC-проверку IDM перед доменной операцией периметра.
+// Возвращает true только при явном разрешении. При отказе ИЛИ недоступности/
+// ошибке IDM пишет HTTP 403 (fail-closed) и возвращает false; внутренние
+// детали наружу не раскрываются (только лог). subject берётся из claims
+// (auth.ClaimsFromContext); пустой subject → IDM ответит отказом.
+func (a *servicesAPI) authorize(w http.ResponseWriter, r *http.Request, project, action string) bool {
+	var subject string
+	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
+		subject = claims.Subject
+	}
+	resp, err := a.idm.CheckAccess(r.Context(), &idmv1.CheckAccessRequest{
+		Subject:  subject,
+		Resource: "project:" + project,
+		Action:   action,
+	})
+	if err != nil || !resp.GetAllowed() {
+		if err != nil {
+			// Недоступность/ошибка IDM — деталь в лог, наружу стабильный 403.
+			a.log.Warn("gateway: RBAC недоступен/ошибка (fail-closed)",
+				logger.Err(err), slog.String("path", routePattern(r)))
+		}
+		a.writeError(w, r, http.StatusForbidden, "доступ запрещён")
+		return false
+	}
+	return true
 }
 
 // errorBody — стабильное тело ошибки периметра (схема Error в OpenAPI).
@@ -57,8 +88,8 @@ type createServiceResult struct {
 }
 
 // register навешивает доменные маршруты на переданный роутер (под middlewares
-// периметра, см. main.go). RBAC IDM CheckAccess пока заглушка — точка вызова
-// помечена ниже, реальная проверка добавляется отдельным change (idm-rbac-min).
+// периметра, см. main.go). Перед проксированием каждая ручка вызывает RBAC IDM
+// CheckAccess (см. authorize), доступ fail-closed.
 func (a *servicesAPI) register(r chi.Router) {
 	r.Post("/projects/{project}/services", a.create)
 	r.Get("/projects/{project}/services", a.list)
@@ -68,6 +99,11 @@ func (a *servicesAPI) register(r chi.Router) {
 // create — POST /projects/{project}/services: запускает создание сервиса.
 func (a *servicesAPI) create(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
+
+	// RBAC: проверка права create до любой доменной обработки (fail-closed).
+	if !a.authorize(w, r, project, "create") {
+		return
+	}
 
 	var body createServiceBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -79,8 +115,6 @@ func (a *servicesAPI) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(idm-rbac-min): здесь будет вызов IDM CheckAccess (create service);
-	// пока граница-заглушка, как в gRPC CreateService.
 	resp, err := a.client.CreateService(r.Context(), &projectsv1.CreateServiceRequest{
 		Project: project,
 		Name:    body.Name,
@@ -101,6 +135,11 @@ func (a *servicesAPI) get(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "name")
 
+	// RBAC: проверка права read до чтения (fail-closed).
+	if !a.authorize(w, r, project, "read") {
+		return
+	}
+
 	resp, err := a.client.GetService(r.Context(), &projectsv1.GetServiceRequest{
 		Project: project,
 		Name:    name,
@@ -120,6 +159,11 @@ func (a *servicesAPI) get(w http.ResponseWriter, r *http.Request) {
 // list — GET /projects/{project}/services: keyset-листинг сервисов проекта.
 func (a *servicesAPI) list(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
+
+	// RBAC: проверка права list до листинга (fail-closed).
+	if !a.authorize(w, r, project, "list") {
+		return
+	}
 
 	pageSize, err := parsePageSize(r.URL.Query().Get("page_size"))
 	if err != nil {
@@ -197,6 +241,8 @@ func httpFromGRPC(err error) (int, string) {
 		return http.StatusConflict, "конфликт состояния"
 	case codes.InvalidArgument:
 		return http.StatusBadRequest, "некорректный запрос"
+	case codes.PermissionDenied:
+		return http.StatusForbidden, "доступ запрещён"
 	default:
 		return http.StatusInternalServerError, "внутренняя ошибка"
 	}

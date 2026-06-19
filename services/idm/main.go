@@ -1,6 +1,7 @@
-// Command idm — сервис прав/ролей (минимум): gRPC AccessService.CheckAccess,
-// Postgres + кэш DragonflyDB (ADR-0003). В этом изменении — скелет: gRPC-сервер
-// и health, без реального RBAC.
+// Command idm — сервис прав/ролей: gRPC AccessService.CheckAccess поверх модели
+// RBAC в Postgres с кэшем решений в DragonflyDB (ADR-0003, ADR-0010).
+// Поведение fail-closed: недоступность БД → отказ; внутренние ошибки наружу не
+// раскрываются.
 package main
 
 import (
@@ -11,7 +12,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -20,19 +23,44 @@ import (
 	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/config"
+	"github.com/YuriB9/idp/pkg/db"
 	"github.com/YuriB9/idp/pkg/grpcx"
 	"github.com/YuriB9/idp/pkg/httpserver"
 	"github.com/YuriB9/idp/pkg/logger"
+	"github.com/YuriB9/idp/services/idm/internal/cache"
+	"github.com/YuriB9/idp/services/idm/internal/repository"
+	"github.com/YuriB9/idp/services/idm/internal/usecase"
 )
 
-// accessServer — скелет реализации AccessService. Доменный RBAC — отдельный change.
-type accessServer struct {
-	idmv1.UnimplementedAccessServiceServer
+// authorizer — зависимость транспорта от usecase-слоя.
+type authorizer interface {
+	CheckAccess(ctx context.Context, subject, resource, action string) (bool, error)
 }
 
-func (s *accessServer) CheckAccess(_ context.Context, _ *idmv1.CheckAccessRequest) (*idmv1.CheckAccessResponse, error) {
-	// Каркас: целевой интерфейс задан, доменная логика — позже.
-	return nil, status.Error(codes.Unimplemented, "CheckAccess not implemented yet")
+// accessServer реализует gRPC AccessService поверх usecase-слоя. Транспортная
+// ответственность: валидация запроса и маппинг решения в proto; внутренние
+// ошибки клиенту не раскрываются.
+type accessServer struct {
+	idmv1.UnimplementedAccessServiceServer
+	auth authorizer
+	log  *slog.Logger
+}
+
+// CheckAccess проверяет право субъекта на действие над ресурсом.
+func (s *accessServer) CheckAccess(ctx context.Context, req *idmv1.CheckAccessRequest) (*idmv1.CheckAccessResponse, error) {
+	if req.GetSubject() == "" || req.GetResource() == "" || req.GetAction() == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject, resource и action обязательны")
+	}
+	allowed, err := s.auth.CheckAccess(ctx, req.GetSubject(), req.GetResource(), req.GetAction())
+	if err != nil {
+		// Fail-closed: деталь — только в лог (ключ slog "err"), наружу — общий статус.
+		s.log.Error("idm: ошибка проверки доступа", logger.Err(err))
+		return nil, status.Error(codes.Unavailable, "проверка доступа временно недоступна")
+	}
+	if !allowed {
+		return &idmv1.CheckAccessResponse{Allowed: false, Reason: "no_matching_permission"}, nil
+	}
+	return &idmv1.CheckAccessResponse{Allowed: true}, nil
 }
 
 func main() {
@@ -49,8 +77,35 @@ func run() error {
 	log := logger.New(logger.Options{Level: config.String("LOG_LEVEL", "info"), JSON: true})
 	verifier := auth.MustVerifierFromEnv(ctx, log)
 
+	// Пул Postgres: источник модели RBAC.
+	pool, err := db.NewPool(ctx, db.PoolConfig{
+		DSN: config.String("PG_DSN", "postgres://idm:idm@postgres-idm:5432/idm?sslmode=disable"),
+	})
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	// Клиент DragonflyDB (протокол Redis): кэш решений.
+	rdb := redis.NewClient(&redis.Options{Addr: config.String("REDIS_ADDR", "dragonfly:6379")})
+	defer func() { _ = rdb.Close() }()
+
+	ttlAllow, err := config.Duration("IDM_CACHE_TTL", 30*time.Second)
+	if err != nil {
+		return err
+	}
+	ttlDeny, err := config.Duration("IDM_CACHE_TTL_DENY", 10*time.Second)
+	if err != nil {
+		return err
+	}
+
+	// Сборка доменных слоёв: repository + cache → usecase → транспорт.
+	repo := repository.New(pool)
+	decisionCache := cache.New(rdb, ttlAllow, ttlDeny)
+	authz := usecase.New(repo, decisionCache)
+
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
-	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{})
+	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{auth: authz, log: log})
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {
@@ -60,6 +115,11 @@ func run() error {
 	httpSrv := httpserver.New(httpserver.Config{
 		Addr:   config.String("HTTP_ADDR", ":8081"),
 		Logger: log,
+		ReadinessChecks: []httpserver.ReadinessCheck{
+			// Content-aware /readyz: трафик не идёт при недоступных зависимостях.
+			{Name: "postgres", Check: pool.Ping},
+			{Name: "dragonfly", Check: decisionCache.Ping},
+		},
 	})
 
 	g, gctx := errgroup.WithContext(ctx)
