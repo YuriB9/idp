@@ -29,7 +29,7 @@
     "tailwindcss": "4.3.1",
     "typescript": "5.9.3",
     "vite": "6.0.7",
-    "vitest": "2.1.8"
+    "vitest": "4.1.9"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.2.9",
