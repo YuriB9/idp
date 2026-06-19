@@ -21,6 +21,12 @@ type GitLab interface {
 	// InjectVariables записывает секреты Vault/Harbor в CI/CD-переменные репозитория
 	// (идемпотентно: перезапись без дублей). Секреты не логируются в открытом виде.
 	InjectVariables(ctx context.Context, in provisioning.InjectSecretsInput) error
+	// SyncMembers синхронизирует участников репозитория по diff: добавляет add,
+	// удаляет remove (идемпотентно). Используется в сценарии «Изменение владельцев».
+	SyncMembers(ctx context.Context, ref provisioning.ResourceRef, add, remove []string) error
+	// RestoreMembers — компенсация: восстанавливает прежний состав участников
+	// (идемпотентно).
+	RestoreMembers(ctx context.Context, ref provisioning.ResourceRef, previous []string) error
 }
 
 // Harbor — клиент Harbor: директория образов и Robot Account.
@@ -37,6 +43,12 @@ type Vault interface {
 	SetupAppRole(ctx context.Context, ref provisioning.ResourceRef) (provisioning.VaultResult, error)
 	// TeardownAppRole — компенсация: удаляет политики и AppRole (идемпотентно).
 	TeardownAppRole(ctx context.Context, ref provisioning.ResourceRef) error
+	// SyncOwners синхронизирует политики доступа владельцев по diff: add получают
+	// доступ, remove теряют (идемпотентно). Сценарий «Изменение владельцев».
+	SyncOwners(ctx context.Context, ref provisioning.ResourceRef, add, remove []string) error
+	// RestoreOwners — компенсация: восстанавливает прежние политики доступа
+	// владельцев (идемпотентно).
+	RestoreOwners(ctx context.Context, ref provisioning.ResourceRef, previous []string) error
 }
 
 // Clients — собранный набор клиентов интеграций для регистрации в activities.

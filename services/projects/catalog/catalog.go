@@ -43,3 +43,14 @@ func (s *StatusStore) Fail(ctx context.Context, serviceID string) error {
 	}
 	return s.repo.TransitionStatus(ctx, id, repository.StatusCreating, repository.StatusFailed)
 }
+
+// SetOwners выполняет guarded-CAS замену набора владельцев (docs/adr/0011).
+// Конфликт версии → errs.ErrConflict, отсутствие записи → errs.ErrNotFound.
+func (s *StatusStore) SetOwners(ctx context.Context, serviceID string, desired []string, expectedVersion int64) error {
+	id, err := uuid.Parse(serviceID)
+	if err != nil {
+		return fmt.Errorf("catalog: некорректный service_id %q: %w", serviceID, err)
+	}
+	_, _, err = s.repo.SetOwners(ctx, id, desired, expectedVersion)
+	return err
+}

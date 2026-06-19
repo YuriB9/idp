@@ -12,6 +12,7 @@ import (
 	"github.com/YuriB9/idp/pkg/errs"
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/activities"
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/integrations"
+	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -64,6 +65,96 @@ func TestActivities_ConflictIsNonRetryable(t *testing.T) {
 	}
 	if !appErr.NonRetryable() {
 		t.Fatal("ошибка должна быть non-retryable")
+	}
+}
+
+// fakeOwners — стаб OwnersStore.
+type fakeOwners struct {
+	err        error
+	gotID      string
+	gotDesired []string
+	gotVersion int64
+}
+
+func (f *fakeOwners) SetOwners(_ context.Context, id string, desired []string, version int64) error {
+	f.gotID, f.gotDesired, f.gotVersion = id, desired, version
+	return f.err
+}
+
+// fakeRoles — стаб RoleAdmin, фиксирует выданные/отозванные роли.
+type fakeRoles struct {
+	assigned []string
+	revoked  []string
+	err      error
+}
+
+func (f *fakeRoles) AssignRole(_ context.Context, subject, role string) error {
+	f.assigned = append(f.assigned, subject+"@"+role)
+	return f.err
+}
+func (f *fakeRoles) RevokeRole(_ context.Context, subject, role string) error {
+	f.revoked = append(f.revoked, subject+"@"+role)
+	return f.err
+}
+
+// TestActivities_GitLabSyncMembers: synchronize делегирует клиенту интеграции.
+func TestActivities_GitLabSyncMembers(t *testing.T) {
+	t.Parallel()
+	mem := integrations.NewMemory()
+	acts := activities.New(mem.Clients(), &fakeStatus{})
+	ref := provisioning.ResourceRef{ServiceID: "id", Project: "p1", Name: "svc"}
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.GitLabSyncMembers)
+
+	in := changeowners.SyncMembersInput{Ref: ref, Add: []string{"bob"}, Remove: nil}
+	if _, err := env.ExecuteActivity(acts.GitLabSyncMembers, in); err != nil {
+		t.Fatalf("GitLabSyncMembers: %v", err)
+	}
+	if !mem.HasMember(ref, "bob") {
+		t.Fatal("ожидали, что bob добавлен в участники")
+	}
+}
+
+// TestActivities_CatalogSetOwnersConflict: конфликт версии оборачивается в
+// non-retryable ApplicationError (точка невозврата ретраем не лечится).
+func TestActivities_CatalogSetOwnersConflict(t *testing.T) {
+	t.Parallel()
+	owners := &fakeOwners{err: fmt.Errorf("guarded-CAS: %w", errs.ErrConflict)}
+	acts := activities.New(integrations.NewMemory().Clients(), &fakeStatus{}, activities.WithOwners(owners))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.CatalogSetOwners)
+
+	in := changeowners.CatalogSetOwnersInput{ServiceID: "svc", Desired: []string{"a"}, ExpectedVersion: 1}
+	_, err := env.ExecuteActivity(acts.CatalogSetOwners, in)
+	var appErr *temporal.ApplicationError
+	if !errors.As(err, &appErr) || !appErr.NonRetryable() {
+		t.Fatalf("ожидали non-retryable ApplicationError, получили %v", err)
+	}
+}
+
+// TestActivities_IDMSyncOwnerRoles: выдаёт роли добавленным, отзывает у удалённых.
+func TestActivities_IDMSyncOwnerRoles(t *testing.T) {
+	t.Parallel()
+	roles := &fakeRoles{}
+	acts := activities.New(integrations.NewMemory().Clients(), &fakeStatus{}, activities.WithIDMRoles(roles))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.IDMSyncOwnerRoles)
+
+	in := changeowners.IDMSyncInput{Project: "demo", Add: []string{"bob"}, Remove: []string{"dave"}}
+	if _, err := env.ExecuteActivity(acts.IDMSyncOwnerRoles, in); err != nil {
+		t.Fatalf("IDMSyncOwnerRoles: %v", err)
+	}
+	if len(roles.assigned) != 1 || roles.assigned[0] != "bob@owner:project:demo" {
+		t.Fatalf("ожидали выдачу bob, получили %v", roles.assigned)
+	}
+	if len(roles.revoked) != 1 || roles.revoked[0] != "dave@owner:project:demo" {
+		t.Fatalf("ожидали отзыв dave, получили %v", roles.revoked)
 	}
 }
 

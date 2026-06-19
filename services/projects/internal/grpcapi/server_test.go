@@ -29,6 +29,12 @@ type fakeCatalog struct {
 	listNext  string
 
 	createCalled bool
+
+	// поля для SetServiceOwners
+	ownersErr    error
+	ownersOut    []string
+	ownersVerOut int64
+	ownersCalled bool
 }
 
 func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, error) {
@@ -42,6 +48,11 @@ func (f *fakeCatalog) List(context.Context, string, int, string) ([]repository.S
 func (f *fakeCatalog) CreateService(context.Context, string, string) (repository.Service, error) {
 	f.createCalled = true
 	return f.svc, f.createErr
+}
+
+func (f *fakeCatalog) SetServiceOwners(_ context.Context, _, _ string, _ []string, _ int64) ([]string, int64, error) {
+	f.ownersCalled = true
+	return f.ownersOut, f.ownersVerOut, f.ownersErr
 }
 
 func discardLogger() *slog.Logger {
@@ -225,6 +236,121 @@ func TestCreateServiceRBAC(t *testing.T) {
 			}
 			if strings.Contains(st.Message(), secret) {
 				t.Fatalf("сообщение клиенту утекло: %q", st.Message())
+			}
+		})
+	}
+}
+
+// TestGetServiceOwnersInResponse проверяет, что owners и owners_version
+// отражаются в ответе GetService.
+func TestGetServiceOwnersInResponse(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeCatalog{svc: repository.Service{
+		Project: "p", Name: "n", Status: repository.StatusActive,
+		Owners: []string{"alice", "bob"}, OwnersVersion: 7,
+	}}
+	srv := New(fake, allowIDM(), discardLogger())
+	resp, err := srv.GetService(context.Background(), &projectsv1.GetServiceRequest{Project: "p", Name: "n"})
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if resp.GetOwnersVersion() != 7 || len(resp.GetOwners()) != 2 || resp.GetOwners()[0] != "alice" {
+		t.Fatalf("owners в ответе = %v v%d", resp.GetOwners(), resp.GetOwnersVersion())
+	}
+}
+
+// TestSetServiceOwnersMapping покрывает SetServiceOwners: успех возвращает
+// owners+version; валидация и доменные ошибки (конфликт версии, NotFound)
+// маппятся в gRPC-коды.
+func TestSetServiceOwnersMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		req      *projectsv1.SetServiceOwnersRequest
+		fake     *fakeCatalog
+		wantCode codes.Code
+	}{
+		{
+			name:     "успех",
+			req:      &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{"alice"}, ExpectedVersion: 1},
+			fake:     &fakeCatalog{ownersOut: []string{"alice"}, ownersVerOut: 2},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "пустой name → InvalidArgument",
+			req:      &projectsv1.SetServiceOwnersRequest{Project: "p"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "пустой владелец → InvalidArgument",
+			req:      &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{""}},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "конфликт версии → FailedPrecondition",
+			req:      &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{"a"}, ExpectedVersion: 1},
+			fake:     &fakeCatalog{ownersErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "не найдено → NotFound",
+			req:      &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{"a"}, ExpectedVersion: 0},
+			fake:     &fakeCatalog{ownersErr: fmt.Errorf("обёртка: %w", errs.ErrNotFound)},
+			wantCode: codes.NotFound,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := New(tc.fake, allowIDM(), discardLogger())
+			resp, err := srv.SetServiceOwners(context.Background(), tc.req)
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("неожиданная ошибка: %v", err)
+				}
+				if resp.GetOwnersVersion() != 2 || len(resp.GetOwners()) != 1 {
+					t.Fatalf("ответ owners=%v v%d", resp.GetOwners(), resp.GetOwnersVersion())
+				}
+				return
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != tc.wantCode {
+				t.Fatalf("код = %v, ожидали %v", st.Code(), tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestSetServiceOwnersRBAC: отказ RBAC и недоступность IDM → PermissionDenied,
+// доменная операция не выполняется.
+func TestSetServiceOwnersRBAC(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		idm  stubIDM
+	}{
+		{name: "отказ RBAC", idm: stubIDM{allowed: false}},
+		{name: "IDM недоступен (fail-closed)", idm: stubIDM{err: status.Error(codes.Unavailable, "down")}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeCatalog{ownersOut: []string{"a"}, ownersVerOut: 1}
+			srv := New(fake, tc.idm, discardLogger())
+			_, err := srv.SetServiceOwners(context.Background(), &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{"a"}, ExpectedVersion: 0})
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.PermissionDenied {
+				t.Fatalf("ожидали PermissionDenied, получили %v", err)
+			}
+			if fake.ownersCalled {
+				t.Fatal("при отказе RBAC доменная операция не должна выполняться")
 			}
 		})
 	}

@@ -11,10 +11,13 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/YuriB9/idp/pkg/errs"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -105,4 +108,51 @@ func TestIntegrationAllowed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestIntegrationAssignRevokeRole проверяет идемпотентность выдачи/отзыва роли,
+// NotFound для несуществующей роли и реальное влияние на решение Allowed.
+func TestIntegrationAssignRevokeRole(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	const subject = "it-role-subject"
+	// seedChain создаёт роль it-role с правом (change_owners, project:itr) — но без
+	// привязки субъекта (привязку проверяем через AssignRole). Уберём посеянную
+	// привязку, чтобы стартовать с чистого состояния субъекта.
+	cleanup := seedChain(t, pool, "other-subject", "change_owners", "project:itr")
+	defer cleanup()
+
+	repo := New(pool)
+	ctx := context.Background()
+
+	// Несуществующая роль → ErrNotFound.
+	if err := repo.AssignRole(ctx, subject, "no-such-role"); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", err)
+	}
+
+	// Выдача роли it-role субъекту → Allowed становится true.
+	if err := repo.AssignRole(ctx, subject, "it-role"); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	// Идемпотентность: повторная выдача без ошибки.
+	if err := repo.AssignRole(ctx, subject, "it-role"); err != nil {
+		t.Fatalf("повторный AssignRole: %v", err)
+	}
+	if allowed, err := repo.Allowed(ctx, subject, "project:itr", "change_owners"); err != nil || !allowed {
+		t.Fatalf("ожидали allow после выдачи роли, got=%v err=%v", allowed, err)
+	}
+
+	// Отзыв → Allowed становится false; повторный отзыв идемпотентен.
+	if err := repo.RevokeRole(ctx, subject, "it-role"); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	if err := repo.RevokeRole(ctx, subject, "it-role"); err != nil {
+		t.Fatalf("повторный RevokeRole: %v", err)
+	}
+	if allowed, err := repo.Allowed(ctx, subject, "project:itr", "change_owners"); err != nil || allowed {
+		t.Fatalf("ожидали deny после отзыва роли, got=%v err=%v", allowed, err)
+	}
+	// Уборка привязки субъекта.
+	_, _ = pool.Exec(ctx, `DELETE FROM subject_roles WHERE subject=$1`, subject)
 }

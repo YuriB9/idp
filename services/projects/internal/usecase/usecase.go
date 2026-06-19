@@ -7,9 +7,12 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
+	"github.com/YuriB9/idp/pkg/errs"
+	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/internal/repository"
 )
 
@@ -22,11 +25,15 @@ type Store interface {
 	TransitionStatus(ctx context.Context, id uuid.UUID, expected, next repository.Status) error
 }
 
-// WorkflowStarter запускает Temporal-workflow «Создание сервиса» (исполняется
-// DevInfra worker'ом). Узкий интерфейс изолирует usecase от Temporal SDK и
-// позволяет подменять его фейком в тестах.
+// WorkflowStarter запускает Temporal-workflow'ы (исполняются DevInfra worker'ом).
+// Узкий интерфейс изолирует usecase от Temporal SDK и позволяет подменять его
+// фейком в тестах.
 type WorkflowStarter interface {
 	StartCreateService(ctx context.Context, serviceID, project, name string) error
+	// StartChangeOwners запускает workflow «Изменение владельцев». desired —
+	// нормализованный желаемый набор, previous — текущий набор (для diff/
+	// компенсаций), expectedVersion — версия для guarded-CAS каталога.
+	StartChangeOwners(ctx context.Context, serviceID, project, name string, desired, previous []string, expectedVersion int64) error
 }
 
 // Catalog — usecase каталога сервисов.
@@ -77,6 +84,56 @@ func (c *Catalog) CreateRecord(ctx context.Context, project, name string) (repos
 		return repository.Service{}, fmt.Errorf("usecase: создание записи каталога: %w", err)
 	}
 	return s, nil
+}
+
+// SetServiceOwners декларативно меняет владельцев сервиса: нормализует желаемый
+// набор, проверяет существование записи и совпадение версии (optimistic-
+// concurrency), вычисляет diff против текущего состава и запускает workflow
+// «Изменение владельцев» (фактическая запись владельцев/синхронизация — в
+// workflow, асинхронно). При пустом diff — идемпотентный no-op: workflow не
+// стартует, возвращается текущее состояние. Возвращает желаемый набор владельцев
+// (детерминированный порядок) и проектируемую версию.
+func (c *Catalog) SetServiceOwners(ctx context.Context, project, name string, owners []string, expectedVersion int64) ([]string, int64, error) {
+	if c.starter == nil {
+		return nil, 0, fmt.Errorf("usecase: запуск workflow не сконфигурирован")
+	}
+	svc, err := c.store.GetByName(ctx, project, name)
+	if err != nil {
+		return nil, 0, fmt.Errorf("usecase: чтение сервиса для смены владельцев: %w", err)
+	}
+	desired := normalizeOwners(owners)
+	// Optimistic-concurrency: версия из запроса должна совпадать с актуальной.
+	if svc.OwnersVersion != expectedVersion {
+		return nil, 0, fmt.Errorf("usecase: версия владельцев устарела (ожидалась %d, актуальна %d): %w",
+			expectedVersion, svc.OwnersVersion, errs.ErrConflict)
+	}
+	add, remove := changeowners.Diff(svc.Owners, desired)
+	if len(add) == 0 && len(remove) == 0 {
+		// Idempotent no-op: состав не меняется — workflow не нужен.
+		current := normalizeOwners(svc.Owners)
+		return current, svc.OwnersVersion, nil
+	}
+	if err := c.starter.StartChangeOwners(ctx, svc.ID.String(), project, name, desired, svc.Owners, expectedVersion); err != nil {
+		return nil, 0, fmt.Errorf("usecase: запуск workflow смены владельцев: %w", err)
+	}
+	// Проектируемое состояние: фактическая запись произойдёт в workflow.
+	return desired, expectedVersion + 1, nil
+}
+
+// normalizeOwners приводит набор владельцев к нормальной форме: отбрасывает
+// пустые строки, убирает дубли, сортирует (детерминированный порядок).
+func normalizeOwners(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, o := range in {
+		if o == "" || seen[o] {
+			continue
+		}
+		seen[o] = true
+		out = append(out, o)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // CreateService фиксирует запись каталога (status=CREATING) и затем запускает

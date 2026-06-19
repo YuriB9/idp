@@ -14,6 +14,20 @@ service AccessService {
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
 }
 
+// RoleAdminService — управляющий контракт ролей: программная выдача/отзыв роли
+// субъекту для синхронизации из доменных потоков (например, «Изменение
+// владельцев»). После изменения привязок IDM инвалидирует кэш решений по
+// затронутому субъекту. Путь не публичный (не периметр); вызывается доменными
+// сервисами/worker'ом. BREAKING: добавление сервиса в существующий контракт idm.
+service RoleAdminService {
+  // AssignRole выдаёт субъекту роль (идемпотентно: повторная выдача — успех).
+  // Несуществующая роль → NotFound; пустые поля → InvalidArgument.
+  rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
+  // RevokeRole отзывает у субъекта роль (идемпотентно: отзыв отсутствующей — успех).
+  // Пустые поля → InvalidArgument.
+  rpc RevokeRole(RevokeRoleRequest) returns (RevokeRoleResponse);
+}
+
 message CheckAccessRequest {
   // subject — идентификатор пользователя/сервиса (например, sub из JWT).
   string subject = 1;
@@ -29,3 +43,21 @@ message CheckAccessResponse {
   // reason — машинно-читаемая причина отказа (для логов/отладки), необязательна.
   string reason = 2;
 }
+
+message AssignRoleRequest {
+  // subject — идентификатор субъекта (sub из JWT).
+  string subject = 1;
+  // role — имя роли (например, "owner:project:demo").
+  string role = 2;
+}
+
+message AssignRoleResponse {}
+
+message RevokeRoleRequest {
+  // subject — идентификатор субъекта.
+  string subject = 1;
+  // role — имя роли.
+  string role = 2;
+}
+
+message RevokeRoleResponse {}

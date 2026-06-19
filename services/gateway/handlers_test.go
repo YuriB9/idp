@@ -28,11 +28,13 @@ type stubProjectsClient struct {
 	getResp    *projectsv1.GetServiceResponse
 	listResp   *projectsv1.ListServicesResponse
 	createResp *projectsv1.CreateServiceResponse
+	ownersResp *projectsv1.SetServiceOwnersResponse
 	err        error
 
 	// gotCreate фиксирует аргументы последнего CreateService для проверок.
 	gotCreate *projectsv1.CreateServiceRequest
 	gotList   *projectsv1.ListServicesRequest
+	gotOwners *projectsv1.SetServiceOwnersRequest
 }
 
 func (s *stubProjectsClient) GetService(_ context.Context, _ *projectsv1.GetServiceRequest, _ ...grpc.CallOption) (*projectsv1.GetServiceResponse, error) {
@@ -56,6 +58,14 @@ func (s *stubProjectsClient) CreateService(_ context.Context, in *projectsv1.Cre
 		return nil, s.err
 	}
 	return s.createResp, nil
+}
+
+func (s *stubProjectsClient) SetServiceOwners(_ context.Context, in *projectsv1.SetServiceOwnersRequest, _ ...grpc.CallOption) (*projectsv1.SetServiceOwnersResponse, error) {
+	s.gotOwners = in
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.ownersResp, nil
 }
 
 // stubIDMClient — стаб gRPC-клиента IDM: возвращает заранее заданное решение
@@ -209,6 +219,7 @@ func TestGetService(t *testing.T) {
 	t.Parallel()
 	router := newTestRouter(&stubProjectsClient{getResp: &projectsv1.GetServiceResponse{
 		Project: "p1", Name: "svc", Status: projectsv1.ServiceStatus_SERVICE_STATUS_ACTIVE,
+		Owners: []string{"alice", "bob"}, OwnersVersion: 4,
 	}})
 
 	rec := httptest.NewRecorder()
@@ -222,9 +233,125 @@ func TestGetService(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("ответ не парсится: %v", err)
 	}
-	want := serviceSummary{Project: "p1", Name: "svc", Status: "active"}
-	if got != want {
-		t.Fatalf("тело = %+v, ожидалось %+v", got, want)
+	if got.Project != "p1" || got.Name != "svc" || got.Status != "active" {
+		t.Fatalf("тело = %+v", got)
+	}
+	if got.OwnersVersion != 4 || len(got.Owners) != 2 || got.Owners[0] != "alice" {
+		t.Fatalf("владельцы в ответе = %v v%d", got.Owners, got.OwnersVersion)
+	}
+}
+
+// TestSetServiceOwners проверяет happy-path, валидацию тела и маппинг конфликта.
+func TestSetServiceOwners(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		body     string
+		stub     *stubProjectsClient
+		wantCode int
+		wantCall bool
+	}{
+		{
+			name:     "happy-path 200",
+			body:     `{"owners":["alice","bob"],"owners_version":4}`,
+			stub:     &stubProjectsClient{ownersResp: &projectsv1.SetServiceOwnersResponse{Owners: []string{"alice", "bob"}, OwnersVersion: 5}},
+			wantCode: http.StatusOK,
+			wantCall: true,
+		},
+		{
+			name:     "пустой владелец → 400 без gRPC",
+			body:     `{"owners":[""],"owners_version":4}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "дубли владельцев → 400 без gRPC",
+			body:     `{"owners":["a","a"],"owners_version":4}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "битый JSON → 400",
+			body:     `{`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "конфликт версии → 409",
+			body:     `{"owners":["a"],"owners_version":1}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.FailedPrecondition, "версия устарела")},
+			wantCode: http.StatusConflict,
+			wantCall: true,
+		},
+		{
+			name:     "сервис не найден → 404",
+			body:     `{"owners":["a"],"owners_version":0}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.NotFound, "нет сервиса")},
+			wantCode: http.StatusNotFound,
+			wantCall: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			router := newTestRouter(tt.stub)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, "/projects/p1/services/svc/owners", strings.NewReader(tt.body))
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("код = %d, ожидалось %d (body=%q)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantCall && (tt.stub.gotOwners == nil || tt.stub.gotOwners.GetProject() != "p1" || tt.stub.gotOwners.GetName() != "svc") {
+				t.Fatalf("SetServiceOwners вызван некорректно: %+v", tt.stub.gotOwners)
+			}
+			if !tt.wantCall && tt.stub.gotOwners != nil {
+				t.Fatalf("gRPC не должен вызываться при невалидном теле")
+			}
+			if tt.wantCode == http.StatusOK {
+				var got setOwnersResult
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("ответ не парсится: %v", err)
+				}
+				if got.OwnersVersion != 5 || len(got.Owners) != 2 {
+					t.Fatalf("тело = %+v", got)
+				}
+			}
+		})
+	}
+}
+
+// TestSetOwnersRBACDeny: при отказе RBAC change_owners → 403, gRPC не вызывается.
+func TestSetOwnersRBACDeny(t *testing.T) {
+	t.Parallel()
+	projects := &stubProjectsClient{}
+	router := newTestRouterWithIDM(projects, &stubIDMClient{allowed: false})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/projects/p1/services/svc/owners", strings.NewReader(`{"owners":["a"],"owners_version":0}`)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("код = %d, ожидалось 403", rec.Code)
+	}
+	if projects.gotOwners != nil {
+		t.Fatalf("при отказе RBAC доменный gRPC не должен вызываться")
+	}
+}
+
+// TestSetOwnersRBACAction проверяет, что действие RBAC = change_owners.
+func TestSetOwnersRBACAction(t *testing.T) {
+	t.Parallel()
+	idm := &stubIDMClient{allowed: true}
+	router := newTestRouterWithIDM(&stubProjectsClient{
+		ownersResp: &projectsv1.SetServiceOwnersResponse{Owners: []string{"a"}, OwnersVersion: 1},
+	}, idm)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/projects/demo/services/svc/owners", strings.NewReader(`{"owners":["a"],"owners_version":0}`)))
+
+	if idm.gotReq.GetResource() != "project:demo" || idm.gotReq.GetAction() != "change_owners" {
+		t.Fatalf("некорректная форма запроса RBAC: %+v", idm.gotReq)
 	}
 }
 

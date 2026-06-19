@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 
+	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -41,6 +42,31 @@ func (s *Starter) StartCreateService(ctx context.Context, serviceID, project, na
 	in := provisioning.CreateServiceInput{ServiceID: serviceID, Project: project, Name: name}
 	if _, err := s.client.ExecuteWorkflow(ctx, opts, provisioning.CreateServiceWorkflow, in); err != nil {
 		return fmt.Errorf("wfstarter: запуск workflow создания: %w", err)
+	}
+	return nil
+}
+
+// StartChangeOwners запускает workflow «Изменение владельцев» с детерминированным
+// WorkflowID. Политика та же, что у создания: не стартовать второй конкурентный
+// workflow для того же сервиса; повторный запуск после терминального статуса
+// допускается.
+func (s *Starter) StartChangeOwners(ctx context.Context, serviceID, project, name string, desired, previous []string, expectedVersion int64) error {
+	opts := client.StartWorkflowOptions{
+		ID:                       changeowners.WorkflowID(project, name),
+		TaskQueue:                s.taskQueue,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
+		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+	}
+	in := changeowners.ChangeOwnersInput{
+		ServiceID:       serviceID,
+		Project:         project,
+		Name:            name,
+		Desired:         desired,
+		Previous:        previous,
+		ExpectedVersion: expectedVersion,
+	}
+	if _, err := s.client.ExecuteWorkflow(ctx, opts, changeowners.ChangeOwnersWorkflow, in); err != nil {
+		return fmt.Errorf("wfstarter: запуск workflow смены владельцев: %w", err)
 	}
 	return nil
 }

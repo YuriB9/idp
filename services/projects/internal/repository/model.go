@@ -45,4 +45,9 @@ type Service struct {
 	Status    Status
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// Owners — текущий набор владельцев (детерминированный порядок при чтении).
+	Owners []string
+	// OwnersVersion — версия набора владельцев для optimistic-concurrency
+	// (guarded-CAS при смене состава, docs/adr/0011).
+	OwnersVersion int64
 }

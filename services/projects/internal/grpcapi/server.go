@@ -26,6 +26,7 @@ type Catalog interface {
 	Get(ctx context.Context, project, name string) (repository.Service, error)
 	List(ctx context.Context, project string, pageSize int, pageToken string) ([]repository.Service, string, error)
 	CreateService(ctx context.Context, project, name string) (repository.Service, error)
+	SetServiceOwners(ctx context.Context, project, name string, owners []string, expectedVersion int64) ([]string, int64, error)
 }
 
 // AccessChecker — зависимость от IDM (RBAC CheckAccess). Совместима с
@@ -61,9 +62,11 @@ func (s *Server) GetService(ctx context.Context, req *projectsv1.GetServiceReque
 		return nil, s.mapError(ctx, "GetService", err)
 	}
 	return &projectsv1.GetServiceResponse{
-		Project: svc.Project,
-		Name:    svc.Name,
-		Status:  st,
+		Project:       svc.Project,
+		Name:          svc.Name,
+		Status:        st,
+		Owners:        svc.Owners,
+		OwnersVersion: svc.OwnersVersion,
 	}, nil
 }
 
@@ -96,7 +99,7 @@ func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServic
 	// RBAC (defense-in-depth): проверка права create через IDM CheckAccess до
 	// любых доменных записей и запуска workflow. authorize возвращает готовый
 	// gRPC-статус PermissionDenied — наружу без раскрытия деталей.
-	if err := s.authorize(ctx, req.GetProject()); err != nil {
+	if err := s.authorize(ctx, req.GetProject(), "create"); err != nil {
 		return nil, err
 	}
 	svc, err := s.catalog.CreateService(ctx, req.GetProject(), req.GetName())
@@ -110,11 +113,37 @@ func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServic
 	return &projectsv1.CreateServiceResponse{Id: svc.ID.String(), Status: st}, nil
 }
 
-// authorize проверяет право субъекта на создание сервиса в проекте через IDM
+// SetServiceOwners декларативно меняет владельцев сервиса: валидирует запрос,
+// проверяет право change_owners (fail-closed) и запускает workflow «Изменение
+// владельцев». Конфликт версии → FailedPrecondition; отсутствие записи →
+// NotFound; невалидный запрос → InvalidArgument. Внутренние детали наружу не
+// раскрываются.
+func (s *Server) SetServiceOwners(ctx context.Context, req *projectsv1.SetServiceOwnersRequest) (*projectsv1.SetServiceOwnersResponse, error) {
+	if req.GetProject() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project и name обязательны")
+	}
+	for _, o := range req.GetOwners() {
+		if o == "" {
+			return nil, status.Error(codes.InvalidArgument, "владелец не может быть пустым")
+		}
+	}
+	// RBAC (defense-in-depth): право change_owners до доменной операции и запуска
+	// workflow.
+	if err := s.authorize(ctx, req.GetProject(), "change_owners"); err != nil {
+		return nil, err
+	}
+	owners, version, err := s.catalog.SetServiceOwners(ctx, req.GetProject(), req.GetName(), req.GetOwners(), req.GetExpectedVersion())
+	if err != nil {
+		return nil, s.mapError(ctx, "SetServiceOwners", err)
+	}
+	return &projectsv1.SetServiceOwnersResponse{Owners: owners, OwnersVersion: version}, nil
+}
+
+// authorize проверяет право субъекта на действие над проектом через IDM
 // CheckAccess. subject берётся из claims (auth.ClaimsFromContext). Отказ ИЛИ
 // недоступность/ошибка IDM → PermissionDenied (fail-closed); внутренние детали
 // наружу не раскрываются (только лог по ключу slog "err").
-func (s *Server) authorize(ctx context.Context, project string) error {
+func (s *Server) authorize(ctx context.Context, project, action string) error {
 	var subject string
 	if claims, ok := auth.ClaimsFromContext(ctx); ok {
 		subject = claims.Subject
@@ -122,7 +151,7 @@ func (s *Server) authorize(ctx context.Context, project string) error {
 	resp, err := s.idm.CheckAccess(ctx, &idmv1.CheckAccessRequest{
 		Subject:  subject,
 		Resource: "project:" + project,
-		Action:   "create",
+		Action:   action,
 	})
 	if err != nil {
 		s.log.Warn("projects: RBAC недоступен/ошибка (fail-closed)", logger.Err(err))

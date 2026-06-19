@@ -142,6 +142,186 @@ func (x *CheckAccessResponse) GetReason() string {
 	return ""
 }
 
+type AssignRoleRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subject — идентификатор субъекта (sub из JWT).
+	Subject string `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	// role — имя роли (например, "owner:project:demo").
+	Role          string `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssignRoleRequest) Reset() {
+	*x = AssignRoleRequest{}
+	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssignRoleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssignRoleRequest) ProtoMessage() {}
+
+func (x *AssignRoleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssignRoleRequest.ProtoReflect.Descriptor instead.
+func (*AssignRoleRequest) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AssignRoleRequest) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *AssignRoleRequest) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+type AssignRoleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssignRoleResponse) Reset() {
+	*x = AssignRoleResponse{}
+	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssignRoleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssignRoleResponse) ProtoMessage() {}
+
+func (x *AssignRoleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssignRoleResponse.ProtoReflect.Descriptor instead.
+func (*AssignRoleResponse) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{3}
+}
+
+type RevokeRoleRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subject — идентификатор субъекта.
+	Subject string `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	// role — имя роли.
+	Role          string `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeRoleRequest) Reset() {
+	*x = RevokeRoleRequest{}
+	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeRoleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeRoleRequest) ProtoMessage() {}
+
+func (x *RevokeRoleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeRoleRequest.ProtoReflect.Descriptor instead.
+func (*RevokeRoleRequest) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RevokeRoleRequest) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *RevokeRoleRequest) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+type RevokeRoleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeRoleResponse) Reset() {
+	*x = RevokeRoleResponse{}
+	mi := &file_idm_v1_idm_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeRoleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeRoleResponse) ProtoMessage() {}
+
+func (x *RevokeRoleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeRoleResponse.ProtoReflect.Descriptor instead.
+func (*RevokeRoleResponse) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{5}
+}
+
 var File_idm_v1_idm_proto protoreflect.FileDescriptor
 
 const file_idm_v1_idm_proto_rawDesc = "" +
@@ -153,9 +333,22 @@ const file_idm_v1_idm_proto_rawDesc = "" +
 	"\x06action\x18\x03 \x01(\tR\x06action\"G\n" +
 	"\x13CheckAccessResponse\x12\x18\n" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2W\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"A\n" +
+	"\x11AssignRoleRequest\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\tR\asubject\x12\x12\n" +
+	"\x04role\x18\x02 \x01(\tR\x04role\"\x14\n" +
+	"\x12AssignRoleResponse\"A\n" +
+	"\x11RevokeRoleRequest\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\tR\asubject\x12\x12\n" +
+	"\x04role\x18\x02 \x01(\tR\x04role\"\x14\n" +
+	"\x12RevokeRoleResponse2W\n" +
 	"\rAccessService\x12F\n" +
-	"\vCheckAccess\x12\x1a.idm.v1.CheckAccessRequest\x1a\x1b.idm.v1.CheckAccessResponseB,Z*github.com/YuriB9/idp/pkg/api/idm/v1;idmv1b\x06proto3"
+	"\vCheckAccess\x12\x1a.idm.v1.CheckAccessRequest\x1a\x1b.idm.v1.CheckAccessResponse2\x9c\x01\n" +
+	"\x10RoleAdminService\x12C\n" +
+	"\n" +
+	"AssignRole\x12\x19.idm.v1.AssignRoleRequest\x1a\x1a.idm.v1.AssignRoleResponse\x12C\n" +
+	"\n" +
+	"RevokeRole\x12\x19.idm.v1.RevokeRoleRequest\x1a\x1a.idm.v1.RevokeRoleResponseB,Z*github.com/YuriB9/idp/pkg/api/idm/v1;idmv1b\x06proto3"
 
 var (
 	file_idm_v1_idm_proto_rawDescOnce sync.Once
@@ -169,16 +362,24 @@ func file_idm_v1_idm_proto_rawDescGZIP() []byte {
 	return file_idm_v1_idm_proto_rawDescData
 }
 
-var file_idm_v1_idm_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_idm_v1_idm_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_idm_v1_idm_proto_goTypes = []any{
 	(*CheckAccessRequest)(nil),  // 0: idm.v1.CheckAccessRequest
 	(*CheckAccessResponse)(nil), // 1: idm.v1.CheckAccessResponse
+	(*AssignRoleRequest)(nil),   // 2: idm.v1.AssignRoleRequest
+	(*AssignRoleResponse)(nil),  // 3: idm.v1.AssignRoleResponse
+	(*RevokeRoleRequest)(nil),   // 4: idm.v1.RevokeRoleRequest
+	(*RevokeRoleResponse)(nil),  // 5: idm.v1.RevokeRoleResponse
 }
 var file_idm_v1_idm_proto_depIdxs = []int32{
 	0, // 0: idm.v1.AccessService.CheckAccess:input_type -> idm.v1.CheckAccessRequest
-	1, // 1: idm.v1.AccessService.CheckAccess:output_type -> idm.v1.CheckAccessResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: idm.v1.RoleAdminService.AssignRole:input_type -> idm.v1.AssignRoleRequest
+	4, // 2: idm.v1.RoleAdminService.RevokeRole:input_type -> idm.v1.RevokeRoleRequest
+	1, // 3: idm.v1.AccessService.CheckAccess:output_type -> idm.v1.CheckAccessResponse
+	3, // 4: idm.v1.RoleAdminService.AssignRole:output_type -> idm.v1.AssignRoleResponse
+	5, // 5: idm.v1.RoleAdminService.RevokeRole:output_type -> idm.v1.RevokeRoleResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -195,9 +396,9 @@ func file_idm_v1_idm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_idm_v1_idm_proto_rawDesc), len(file_idm_v1_idm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   6,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_idm_v1_idm_proto_goTypes,
 		DependencyIndexes: file_idm_v1_idm_proto_depIdxs,

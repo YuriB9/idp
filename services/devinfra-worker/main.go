@@ -21,7 +21,10 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	"github.com/YuriB9/idp/pkg/config"
 	"github.com/YuriB9/idp/pkg/db"
 	"github.com/YuriB9/idp/pkg/httpserver"
@@ -30,8 +33,27 @@ import (
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/activities"
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/integrations"
 	"github.com/YuriB9/idp/services/projects/catalog"
+	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
+
+// idmRoleAdmin — адаптер gRPC-клиента IDM RoleAdminService к интерфейсу
+// activities.RoleAdmin. Инвалидация кэша решений выполняется самим IDM.
+type idmRoleAdmin struct {
+	c idmv1.RoleAdminServiceClient
+}
+
+// AssignRole выдаёт субъекту роль (идемпотентно).
+func (a idmRoleAdmin) AssignRole(ctx context.Context, subject, role string) error {
+	_, err := a.c.AssignRole(ctx, &idmv1.AssignRoleRequest{Subject: subject, Role: role})
+	return err
+}
+
+// RevokeRole отзывает у субъекта роль (идемпотентно).
+func (a idmRoleAdmin) RevokeRole(ctx context.Context, subject, role string) error {
+	_, err := a.c.RevokeRole(ctx, &idmv1.RevokeRoleRequest{Subject: subject, Role: role})
+	return err
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -80,7 +102,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	acts := activities.New(clients, catalog.NewStatusStore(pool))
+	// gRPC-клиент IDM — для синхронизации ролей владельцев (AssignRole/RevokeRole).
+	idmConn, err := grpc.NewClient(config.String("IDM_GRPC_ADDR", "idm:9090"),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = idmConn.Close() }()
+
+	store := catalog.NewStatusStore(pool)
+	acts := activities.New(clients, store,
+		activities.WithOwners(store),
+		activities.WithIDMRoles(idmRoleAdmin{c: idmv1.NewRoleAdminServiceClient(idmConn)}),
+	)
 
 	temporalClient, err := client.NewLazyClient(client.Options{
 		HostPort:  config.String("TEMPORAL_HOSTPORT", "temporal:7233"),
@@ -96,6 +130,8 @@ func run() error {
 	w := worker.New(temporalClient, taskQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(provisioning.CreateServiceWorkflow,
 		workflow.RegisterOptions{Name: provisioning.WorkflowName})
+	w.RegisterWorkflowWithOptions(changeowners.ChangeOwnersWorkflow,
+		workflow.RegisterOptions{Name: changeowners.WorkflowName})
 	acts.Register(w)
 
 	// alive отражает, что worker запущен и поллит task-queue (k8s не должен слать

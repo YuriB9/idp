@@ -58,7 +58,14 @@ export function ServiceListPage() {
               to={`/projects/${project}/services/${s.name}`}
               className="flex items-center justify-between px-5 py-3.5 transition-colors hover:bg-muted/50"
             >
-              <span className="font-medium">{s.name}</span>
+              <span className="flex flex-col">
+                <span className="font-medium">{s.name}</span>
+                {s.owners.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    Владельцы: {s.owners.join(", ")}
+                  </span>
+                )}
+              </span>
               <span className="flex items-center gap-3">
                 <StatusBadge status={s.status} />
                 <ChevronRight className="size-4 text-muted-foreground" />

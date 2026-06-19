@@ -64,6 +64,32 @@ ON CONFLICT DO NOTHING;
 `AUTH_DISABLED_SUBJECT` в docker-compose, поэтому сквозной сценарий портала
 «Создание сервиса» в проекте `demo` проходит при включённом RBAC.
 
+## Управляющие RPC ролей (RoleAdminService)
+
+Помимо `CheckAccess`, IDM предоставляет управляющий контракт ролей
+`RoleAdminService` для **программной** синхронизации привязок субъект↔роль из
+доменных потоков (например, workflow «Изменение владельцев»):
+
+- `AssignRole(subject, role)` — выдать субъекту роль. Идемпотентно (повторная
+  выдача — успех). Несуществующая роль → `NotFound`; пустые поля →
+  `InvalidArgument`.
+- `RevokeRole(subject, role)` — отозвать роль. Идемпотентно (отзыв отсутствующей
+  привязки/роли — успех).
+
+После любого изменения привязок IDM **инвалидирует кэш решений по затронутому
+субъекту** (`InvalidateSubject`), поэтому устаревшие allow/deny не «залипают».
+Путь не публичный (не периметр) — вызывается доменными сервисами/worker'ом.
+
+### Роль владельца (`owner:project:<project>`)
+
+Сценарий «Изменение владельцев» выдаёт/отзывает per-project роль
+`owner:project:<project>` (права `read`/`list`/`change_owners` над
+`project:<project>`). Локальный стенд засевает её для `project:demo`
+(`migrations/0003_seed_owners_demo.sql`) и право `(change_owners, project:demo)`
+субъекту `demo-user`, чтобы сквозной сценарий смены владельцев проходил при
+включённом RBAC. Роль должна существовать до выдачи — иначе `AssignRole` вернёт
+`NotFound`.
+
 ## Как проверить отказ/разрешение
 
 Через портал/периметр (локалка, `AUTH_DISABLED=true`, `AUTH_DISABLED_SUBJECT=demo-user`):
