@@ -70,7 +70,10 @@ func RequestIDUnary() grpc.UnaryServerInterceptor {
 func AuthUnary(v *auth.Verifier) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if v.Disabled() {
-			return handler(ctx, req)
+			// Локальный bypass: проверки нет, но кладём claims с DisabledSubject
+			// (Verify("") в disabled-режиме), чтобы downstream RBAC видел субъекта.
+			claims, _ := v.Verify("")
+			return handler(auth.ContextWithClaims(ctx, claims), req)
 		}
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {

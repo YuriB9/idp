@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
 )
 
@@ -57,9 +58,32 @@ func (s *stubProjectsClient) CreateService(_ context.Context, in *projectsv1.Cre
 	return s.createResp, nil
 }
 
-// newTestRouter собирает роутер с доменными ручками поверх переданного стаба.
+// stubIDMClient — стаб gRPC-клиента IDM: возвращает заранее заданное решение
+// или ошибку, не выходя в сеть.
+type stubIDMClient struct {
+	allowed bool
+	err     error
+	gotReq  *idmv1.CheckAccessRequest
+}
+
+func (s *stubIDMClient) CheckAccess(_ context.Context, in *idmv1.CheckAccessRequest, _ ...grpc.CallOption) (*idmv1.CheckAccessResponse, error) {
+	s.gotReq = in
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &idmv1.CheckAccessResponse{Allowed: s.allowed}, nil
+}
+
+// newTestRouter собирает роутер с доменными ручками поверх стаба projects и
+// разрешающего по умолчанию стаба IDM (RBAC-тесты задают свой idm-стаб через
+// newTestRouterWithIDM).
 func newTestRouter(client projectsv1.ProjectsServiceClient) http.Handler {
-	api := &servicesAPI{client: client, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return newTestRouterWithIDM(client, &stubIDMClient{allowed: true})
+}
+
+// newTestRouterWithIDM собирает роутер с явными стабами projects и IDM.
+func newTestRouterWithIDM(client projectsv1.ProjectsServiceClient, idm idmv1.AccessServiceClient) http.Handler {
+	api := &servicesAPI{client: client, idm: idm, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	r := chi.NewRouter()
 	api.register(r)
 	return r
@@ -251,5 +275,92 @@ func TestListServicesBadPageSize(t *testing.T) {
 	}
 	if stub.gotList != nil {
 		t.Fatalf("gRPC не должен вызываться при некорректном page_size")
+	}
+}
+
+// TestRBACDenyForbids проверяет, что при allowed=false шлюз отвечает 403 и не
+// вызывает доменный gRPC, а тело не раскрывает внутренних деталей.
+func TestRBACDenyForbids(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   string
+	}{
+		{"create deny", http.MethodPost, "/projects/p1/services", `{"name":"svc"}`},
+		{"list deny", http.MethodGet, "/projects/p1/services", ""},
+		{"get deny", http.MethodGet, "/projects/p1/services/svc", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			projects := &stubProjectsClient{}
+			router := newTestRouterWithIDM(projects, &stubIDMClient{allowed: false})
+
+			rec := httptest.NewRecorder()
+			var bodyReader io.Reader
+			if tt.body != "" {
+				bodyReader = strings.NewReader(tt.body)
+			}
+			router.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.target, bodyReader))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("код = %d, ожидалось 403", rec.Code)
+			}
+			if projects.gotCreate != nil || projects.gotList != nil {
+				t.Fatalf("при отказе RBAC доменный gRPC не должен вызываться")
+			}
+			var eb errorBody
+			if err := json.NewDecoder(rec.Body).Decode(&eb); err != nil {
+				t.Fatalf("тело ошибки не распарсилось: %v", err)
+			}
+			if strings.Contains(eb.Error, "project:") || eb.Error == "" {
+				t.Fatalf("тело раскрывает детали или пустое: %q", eb.Error)
+			}
+		})
+	}
+}
+
+// TestRBACUnavailableFailClosed проверяет, что при ошибке вызова IDM шлюз
+// отвечает 403 (fail-closed), а не пропускает запрос и не отдаёт детали.
+func TestRBACUnavailableFailClosed(t *testing.T) {
+	t.Parallel()
+
+	projects := &stubProjectsClient{}
+	idm := &stubIDMClient{err: status.Error(codes.Unavailable, "внутренняя деталь: idm down")}
+	router := newTestRouterWithIDM(projects, idm)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/projects/p1/services", strings.NewReader(`{"name":"svc"}`)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("код = %d, ожидалось 403 (fail-closed)", rec.Code)
+	}
+	if projects.gotCreate != nil {
+		t.Fatalf("при недоступном IDM доменный gRPC не должен вызываться")
+	}
+	var eb errorBody
+	_ = json.NewDecoder(rec.Body).Decode(&eb)
+	if strings.Contains(eb.Error, "idm down") {
+		t.Fatalf("тело раскрывает внутренние детали: %q", eb.Error)
+	}
+}
+
+// TestRBACRequestShape проверяет, что resource/action формируются корректно.
+func TestRBACRequestShape(t *testing.T) {
+	t.Parallel()
+
+	idm := &stubIDMClient{allowed: true}
+	router := newTestRouterWithIDM(&stubProjectsClient{
+		createResp: &projectsv1.CreateServiceResponse{Id: "id-1", Status: projectsv1.ServiceStatus_SERVICE_STATUS_CREATING},
+	}, idm)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/projects/demo/services", strings.NewReader(`{"name":"svc"}`)))
+
+	if idm.gotReq.GetResource() != "project:demo" || idm.gotReq.GetAction() != "create" {
+		t.Fatalf("некорректная форма запроса RBAC: %+v", idm.gotReq)
 	}
 }

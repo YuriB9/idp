@@ -19,7 +19,9 @@ import (
 	"go.temporal.io/sdk/client"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
+	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
 	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/config"
@@ -77,11 +79,19 @@ func run() error {
 	}
 	defer temporalClient.Close()
 
+	// gRPC-клиент IDM: RBAC CheckAccess перед CreateService (defense-in-depth).
+	idmConn, err := grpc.NewClient(config.String("IDM_GRPC_ADDR", "idm:9090"),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = idmConn.Close() }()
+
 	// Сборка доменных слоёв: repository → usecase (+ запуск workflow) → транспорт.
 	repo := repository.New(pool)
 	starter := wfstarter.New(temporalClient, config.String("TEMPORAL_TASK_QUEUE", ""))
 	catalog := usecase.New(repo, usecase.WithStarter(starter))
-	projectsAPI := grpcapi.New(catalog, log)
+	projectsAPI := grpcapi.New(catalog, idmv1.NewAccessServiceClient(idmConn), log)
 
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	projectsv1.RegisterProjectsServiceServer(grpcSrv, projectsAPI)

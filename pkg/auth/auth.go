@@ -33,6 +33,11 @@ import (
 type Config struct {
 	// Disabled отключает проверку (только локалка, явный AUTH_DISABLED=true).
 	Disabled bool
+	// DisabledSubject — subject, подставляемый в Claims в disabled-режиме.
+	// По умолчанию пуст; задаётся ТОЛЬКО локально (AUTH_DISABLED_SUBJECT),
+	// чтобы локальный сквозной сценарий проходил при включённом RBAC IDM.
+	// В проде неактуален: AUTH_DISABLED запрещён, subject берётся из токена.
+	DisabledSubject string
 	// JWKSURL — endpoint JWKS (обязателен и https, если !Disabled).
 	JWKSURL string
 	// Issuer — ожидаемый iss.
@@ -101,8 +106,8 @@ func NewVerifier(ctx context.Context, cfg Config) (*Verifier, error) {
 // MustVerifierFromEnv читает конфигурацию из окружения и при ошибке/misconfig
 // завершает процесс os.Exit(1) (fail-closed). Используется в main сервисов.
 //
-// Переменные: AUTH_DISABLED, JWKS_URL, AUTH_ISSUER, AUTH_AUDIENCE,
-// AUTH_METHODS (csv), AUTH_ADMIN_KEY.
+// Переменные: AUTH_DISABLED, AUTH_DISABLED_SUBJECT, JWKS_URL, AUTH_ISSUER,
+// AUTH_AUDIENCE, AUTH_METHODS (csv), AUTH_ADMIN_KEY.
 func MustVerifierFromEnv(ctx context.Context, log *slog.Logger) *Verifier {
 	disabled, err := config.Bool("AUTH_DISABLED", false)
 	if err != nil {
@@ -110,11 +115,12 @@ func MustVerifierFromEnv(ctx context.Context, log *slog.Logger) *Verifier {
 		os.Exit(1)
 	}
 	cfg := Config{
-		Disabled: disabled,
-		JWKSURL:  config.String("JWKS_URL", ""),
-		Issuer:   config.String("AUTH_ISSUER", ""),
-		Audience: config.String("AUTH_AUDIENCE", ""),
-		AdminKey: config.String("AUTH_ADMIN_KEY", ""),
+		Disabled:        disabled,
+		DisabledSubject: config.String("AUTH_DISABLED_SUBJECT", ""),
+		JWKSURL:         config.String("JWKS_URL", ""),
+		Issuer:          config.String("AUTH_ISSUER", ""),
+		Audience:        config.String("AUTH_AUDIENCE", ""),
+		AdminKey:        config.String("AUTH_ADMIN_KEY", ""),
 	}
 	if m := config.String("AUTH_METHODS", ""); m != "" {
 		cfg.ValidMethods = strings.Split(m, ",")
@@ -141,7 +147,9 @@ type Claims struct {
 // При Disabled возвращает пустые Claims без проверки.
 func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 	if v.cfg.Disabled {
-		return &Claims{}, nil
+		// Локальный bypass: проверки нет, но subject можно зафиксировать
+		// (AUTH_DISABLED_SUBJECT), чтобы RBAC IDM работал в локальном стенде.
+		return &Claims{Subject: v.cfg.DisabledSubject}, nil
 	}
 	mc := jwt.MapClaims{}
 	tok, err := v.parser.ParseWithClaims(tokenString, mc, v.keyfunc)

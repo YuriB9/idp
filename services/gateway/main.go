@@ -53,12 +53,11 @@ func run() error {
 	}
 	defer func() { _ = projectsConn.Close() }()
 
-	// IDM-клиент пока не используется доменными ручками периметра (RBAC
-	// CheckAccess — отдельный change idm-rbac-min); связываем, чтобы
-	// зафиксировать границу контракта. Клиент projects — основа REST-ручек.
-	_ = idmv1.NewAccessServiceClient(idmConn)
+	// IDM-клиент — RBAC CheckAccess перед доменными ручками (fail-closed).
+	// Клиент projects — основа REST-ручек периметра.
 	services := &servicesAPI{
 		client: projectsv1.NewProjectsServiceClient(projectsConn),
+		idm:    idmv1.NewAccessServiceClient(idmConn),
 		log:    log,
 	}
 

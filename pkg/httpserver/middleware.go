@@ -69,7 +69,11 @@ func Auth(v *auth.Verifier, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if v.Disabled() {
-				next.ServeHTTP(w, r)
+				// Локальный bypass: проверки нет, но кладём claims с
+				// DisabledSubject (Verify("") в disabled-режиме), чтобы
+				// downstream RBAC IDM видел субъекта в локальном стенде.
+				claims, _ := v.Verify("")
+				next.ServeHTTP(w, r.WithContext(auth.ContextWithClaims(r.Context(), claims)))
 				return
 			}
 			tok, ok := auth.BearerToken(r.Header.Get("Authorization"))

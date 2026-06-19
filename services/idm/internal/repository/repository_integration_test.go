@@ -1,0 +1,108 @@
+//go:build integration
+
+// Интеграционные тесты репозитория RBAC против реального PostgreSQL. Запуск:
+//
+//	go test -tags=integration ./internal/repository/...
+//
+// Требуется доступная БД; DSN берётся из IDM_TEST_DSN (по умолчанию —
+// локальный postgres-idm). Схема должна быть применена миграциями
+// (services/idm/migrations). При отсутствии БД тест помечается Skip.
+package repository
+
+import (
+	"context"
+	"os"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func testPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("IDM_TEST_DSN")
+	if dsn == "" {
+		dsn = "postgres://idm:idm@localhost:5433/idm?sslmode=disable"
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Skipf("нет доступа к БД (%v) — пропуск интеграционного теста", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Skipf("БД недоступна (%v) — пропуск интеграционного теста", err)
+	}
+	return pool
+}
+
+// seedChain создаёт роль, право и привязку субъекта, возвращая функцию очистки.
+func seedChain(t *testing.T, pool *pgxpool.Pool, subject, action, resource string) func() {
+	t.Helper()
+	ctx := context.Background()
+	var roleID string
+	const roleName = "it-role"
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO roles (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
+		roleName).Scan(&roleID); err != nil {
+		t.Fatalf("вставка роли: %v", err)
+	}
+	var permID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO permissions (action, resource) VALUES ($1, $2)
+		 ON CONFLICT (action, resource) DO UPDATE SET action=EXCLUDED.action RETURNING id`,
+		action, resource).Scan(&permID); err != nil {
+		t.Fatalf("вставка права: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		roleID, permID); err != nil {
+		t.Fatalf("связь роль-право: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO subject_roles (subject, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		subject, roleID); err != nil {
+		t.Fatalf("привязка субъекта: %v", err)
+	}
+	return func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM subject_roles WHERE role_id=$1`, roleID)
+		_, _ = pool.Exec(ctx, `DELETE FROM role_permissions WHERE role_id=$1`, roleID)
+		_, _ = pool.Exec(ctx, `DELETE FROM permissions WHERE id=$1`, permID)
+		_, _ = pool.Exec(ctx, `DELETE FROM roles WHERE id=$1`, roleID)
+	}
+}
+
+// TestIntegrationAllowed проверяет реальную EXISTS-цепочку: разрешение при
+// наличии права, отказ при отсутствии (deny-by-default) и при несовпадении ресурса.
+func TestIntegrationAllowed(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	const subject = "it-subject"
+	cleanup := seedChain(t, pool, subject, "create", "project:it")
+	defer cleanup()
+
+	repo := New(pool)
+	ctx := context.Background()
+
+	tests := []struct {
+		name                      string
+		subject, resource, action string
+		want                      bool
+	}{
+		{name: "право выдано — allow", subject: subject, resource: "project:it", action: "create", want: true},
+		{name: "нет привязки субъекта — deny", subject: "stranger", resource: "project:it", action: "create", want: false},
+		{name: "несовпадение ресурса — deny", subject: subject, resource: "project:other", action: "create", want: false},
+		{name: "несовпадение действия — deny", subject: subject, resource: "project:it", action: "delete", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := repo.Allowed(ctx, tt.subject, tt.resource, tt.action)
+			if err != nil {
+				t.Fatalf("Allowed: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("решение: получили %v, ожидали %v", got, tt.want)
+			}
+		})
+	}
+}
