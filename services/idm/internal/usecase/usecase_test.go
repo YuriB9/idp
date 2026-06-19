@@ -67,6 +67,92 @@ func (c *fakeCache) Set(_ context.Context, s, r, a string, allowed bool) error {
 	return nil
 }
 
+// fakeRoleStore — стаб RoleStore.
+type fakeRoleStore struct {
+	assignErr error
+	revokeErr error
+	assigned  []string
+	revoked   []string
+}
+
+func (s *fakeRoleStore) AssignRole(_ context.Context, subject, role string) error {
+	if s.assignErr != nil {
+		return s.assignErr
+	}
+	s.assigned = append(s.assigned, subject+"@"+role)
+	return nil
+}
+func (s *fakeRoleStore) RevokeRole(_ context.Context, subject, role string) error {
+	if s.revokeErr != nil {
+		return s.revokeErr
+	}
+	s.revoked = append(s.revoked, subject+"@"+role)
+	return nil
+}
+
+// fakeInvalidator — стаб инвалидатора кэша по субъекту.
+type fakeInvalidator struct {
+	invalidated []string
+	err         error
+}
+
+func (i *fakeInvalidator) InvalidateSubject(_ context.Context, subject string) error {
+	if i.err != nil {
+		return i.err
+	}
+	i.invalidated = append(i.invalidated, subject)
+	return nil
+}
+
+// TestRoleManager_AssignInvalidates: успешная выдача инвалидирует кэш субъекта.
+func TestRoleManager_AssignInvalidates(t *testing.T) {
+	t.Parallel()
+	store := &fakeRoleStore{}
+	inv := &fakeInvalidator{}
+	m := usecase.NewRoleManager(store, inv)
+
+	if err := m.AssignRole(context.Background(), "bob", "owner:project:demo"); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if len(store.assigned) != 1 || store.assigned[0] != "bob@owner:project:demo" {
+		t.Fatalf("ожидали выдачу роли bob, получили %v", store.assigned)
+	}
+	if len(inv.invalidated) != 1 || inv.invalidated[0] != "bob" {
+		t.Fatalf("ожидали инвалидацию кэша bob, получили %v", inv.invalidated)
+	}
+}
+
+// TestRoleManager_RevokeInvalidates: успешный отзыв инвалидирует кэш субъекта.
+func TestRoleManager_RevokeInvalidates(t *testing.T) {
+	t.Parallel()
+	store := &fakeRoleStore{}
+	inv := &fakeInvalidator{}
+	m := usecase.NewRoleManager(store, inv)
+
+	if err := m.RevokeRole(context.Background(), "carol", "owner:project:demo"); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	if len(store.revoked) != 1 || inv.invalidated[0] != "carol" {
+		t.Fatalf("ожидали отзыв и инвалидацию carol, получили revoked=%v inv=%v", store.revoked, inv.invalidated)
+	}
+}
+
+// TestRoleManager_AssignErrorSkipsInvalidation: ошибка стора пробрасывается,
+// инвалидация не выполняется.
+func TestRoleManager_AssignErrorSkipsInvalidation(t *testing.T) {
+	t.Parallel()
+	store := &fakeRoleStore{assignErr: errors.New("роль не найдена")}
+	inv := &fakeInvalidator{}
+	m := usecase.NewRoleManager(store, inv)
+
+	if err := m.AssignRole(context.Background(), "bob", "missing"); err == nil {
+		t.Fatal("ожидали ошибку выдачи роли")
+	}
+	if len(inv.invalidated) != 0 {
+		t.Fatalf("при ошибке выдачи кэш не должен инвалидироваться, получили %v", inv.invalidated)
+	}
+}
+
 func TestCheckAccess_Decisions(t *testing.T) {
 	t.Parallel()
 

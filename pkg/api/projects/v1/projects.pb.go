@@ -91,7 +91,11 @@ type Service struct {
 	// name — имя сервиса внутри проекта.
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// status — текущий статус записи.
-	Status        ServiceStatus `protobuf:"varint,3,opt,name=status,proto3,enum=projects.v1.ServiceStatus" json:"status,omitempty"`
+	Status ServiceStatus `protobuf:"varint,3,opt,name=status,proto3,enum=projects.v1.ServiceStatus" json:"status,omitempty"`
+	// owners — текущий набор владельцев сервиса (детерминированный порядок).
+	Owners []string `protobuf:"bytes,4,rep,name=owners,proto3" json:"owners,omitempty"`
+	// owners_version — версия набора владельцев для optimistic-concurrency.
+	OwnersVersion int64 `protobuf:"varint,5,opt,name=owners_version,json=ownersVersion,proto3" json:"owners_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -145,6 +149,20 @@ func (x *Service) GetStatus() ServiceStatus {
 		return x.Status
 	}
 	return ServiceStatus_SERVICE_STATUS_UNSPECIFIED
+}
+
+func (x *Service) GetOwners() []string {
+	if x != nil {
+		return x.Owners
+	}
+	return nil
+}
+
+func (x *Service) GetOwnersVersion() int64 {
+	if x != nil {
+		return x.OwnersVersion
+	}
+	return 0
 }
 
 type GetServiceRequest struct {
@@ -202,10 +220,14 @@ func (x *GetServiceRequest) GetName() string {
 }
 
 type GetServiceResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Project       string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Status        ServiceStatus          `protobuf:"varint,3,opt,name=status,proto3,enum=projects.v1.ServiceStatus" json:"status,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Project string                 `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Status  ServiceStatus          `protobuf:"varint,3,opt,name=status,proto3,enum=projects.v1.ServiceStatus" json:"status,omitempty"`
+	// owners — текущий набор владельцев (детерминированный порядок).
+	Owners []string `protobuf:"bytes,4,rep,name=owners,proto3" json:"owners,omitempty"`
+	// owners_version — версия набора владельцев для optimistic-concurrency.
+	OwnersVersion int64 `protobuf:"varint,5,opt,name=owners_version,json=ownersVersion,proto3" json:"owners_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -259,6 +281,20 @@ func (x *GetServiceResponse) GetStatus() ServiceStatus {
 		return x.Status
 	}
 	return ServiceStatus_SERVICE_STATUS_UNSPECIFIED
+}
+
+func (x *GetServiceResponse) GetOwners() []string {
+	if x != nil {
+		return x.Owners
+	}
+	return nil
+}
+
+func (x *GetServiceResponse) GetOwnersVersion() int64 {
+	if x != nil {
+		return x.OwnersVersion
+	}
+	return 0
 }
 
 type ListServicesRequest struct {
@@ -487,22 +523,154 @@ func (x *CreateServiceResponse) GetStatus() ServiceStatus {
 	return ServiceStatus_SERVICE_STATUS_UNSPECIFIED
 }
 
+type SetServiceOwnersRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project — идентификатор проекта-владельца.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// name — имя сервиса внутри проекта.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// owners — полный желаемый набор владельцев (декларативно). Сервер нормализует
+	// (без пустых строк и дублей) и вычисляет diff против текущего состояния.
+	Owners []string `protobuf:"bytes,3,rep,name=owners,proto3" json:"owners,omitempty"`
+	// expected_version — ожидаемая версия набора владельцев (optimistic-concurrency).
+	// Несовпадение с актуальной версией → FailedPrecondition.
+	ExpectedVersion int64 `protobuf:"varint,4,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SetServiceOwnersRequest) Reset() {
+	*x = SetServiceOwnersRequest{}
+	mi := &file_projects_v1_projects_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServiceOwnersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServiceOwnersRequest) ProtoMessage() {}
+
+func (x *SetServiceOwnersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServiceOwnersRequest.ProtoReflect.Descriptor instead.
+func (*SetServiceOwnersRequest) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SetServiceOwnersRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *SetServiceOwnersRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SetServiceOwnersRequest) GetOwners() []string {
+	if x != nil {
+		return x.Owners
+	}
+	return nil
+}
+
+func (x *SetServiceOwnersRequest) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+type SetServiceOwnersResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// owners — итоговый набор владельцев после применения (детерминированный порядок).
+	Owners []string `protobuf:"bytes,1,rep,name=owners,proto3" json:"owners,omitempty"`
+	// owners_version — новая версия набора владельцев.
+	OwnersVersion int64 `protobuf:"varint,2,opt,name=owners_version,json=ownersVersion,proto3" json:"owners_version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetServiceOwnersResponse) Reset() {
+	*x = SetServiceOwnersResponse{}
+	mi := &file_projects_v1_projects_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetServiceOwnersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetServiceOwnersResponse) ProtoMessage() {}
+
+func (x *SetServiceOwnersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetServiceOwnersResponse.ProtoReflect.Descriptor instead.
+func (*SetServiceOwnersResponse) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SetServiceOwnersResponse) GetOwners() []string {
+	if x != nil {
+		return x.Owners
+	}
+	return nil
+}
+
+func (x *SetServiceOwnersResponse) GetOwnersVersion() int64 {
+	if x != nil {
+		return x.OwnersVersion
+	}
+	return 0
+}
+
 var File_projects_v1_projects_proto protoreflect.FileDescriptor
 
 const file_projects_v1_projects_proto_rawDesc = "" +
 	"\n" +
-	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"k\n" +
+	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"\xaa\x01\n" +
 	"\aService\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
-	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"A\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\x12\x16\n" +
+	"\x06owners\x18\x04 \x03(\tR\x06owners\x12%\n" +
+	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\"A\n" +
 	"\x11GetServiceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"v\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xb5\x01\n" +
 	"\x12GetServiceResponse\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
-	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"k\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\x12\x16\n" +
+	"\x06owners\x18\x04 \x03(\tR\x06owners\x12%\n" +
+	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\"k\n" +
 	"\x13ListServicesRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -516,18 +684,27 @@ const file_projects_v1_projects_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"[\n" +
 	"\x15CreateServiceResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status*\xa5\x01\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"\x8a\x01\n" +
+	"\x17SetServiceOwnersRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06owners\x18\x03 \x03(\tR\x06owners\x12)\n" +
+	"\x10expected_version\x18\x04 \x01(\x03R\x0fexpectedVersion\"Y\n" +
+	"\x18SetServiceOwnersResponse\x12\x16\n" +
+	"\x06owners\x18\x01 \x03(\tR\x06owners\x12%\n" +
+	"\x0eowners_version\x18\x02 \x01(\x03R\rownersVersion*\xa5\x01\n" +
 	"\rServiceStatus\x12\x1e\n" +
 	"\x1aSERVICE_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17SERVICE_STATUS_CREATING\x10\x01\x12\x19\n" +
 	"\x15SERVICE_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSERVICE_STATUS_DECOMMISSIONED\x10\x03\x12\x19\n" +
-	"\x15SERVICE_STATUS_FAILED\x10\x042\x8d\x02\n" +
+	"\x15SERVICE_STATUS_FAILED\x10\x042\xee\x02\n" +
 	"\x0fProjectsService\x12M\n" +
 	"\n" +
 	"GetService\x12\x1e.projects.v1.GetServiceRequest\x1a\x1f.projects.v1.GetServiceResponse\x12S\n" +
 	"\fListServices\x12 .projects.v1.ListServicesRequest\x1a!.projects.v1.ListServicesResponse\x12V\n" +
-	"\rCreateService\x12!.projects.v1.CreateServiceRequest\x1a\".projects.v1.CreateServiceResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
+	"\rCreateService\x12!.projects.v1.CreateServiceRequest\x1a\".projects.v1.CreateServiceResponse\x12_\n" +
+	"\x10SetServiceOwners\x12$.projects.v1.SetServiceOwnersRequest\x1a%.projects.v1.SetServiceOwnersResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
 
 var (
 	file_projects_v1_projects_proto_rawDescOnce sync.Once
@@ -542,16 +719,18 @@ func file_projects_v1_projects_proto_rawDescGZIP() []byte {
 }
 
 var file_projects_v1_projects_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_projects_v1_projects_proto_goTypes = []any{
-	(ServiceStatus)(0),            // 0: projects.v1.ServiceStatus
-	(*Service)(nil),               // 1: projects.v1.Service
-	(*GetServiceRequest)(nil),     // 2: projects.v1.GetServiceRequest
-	(*GetServiceResponse)(nil),    // 3: projects.v1.GetServiceResponse
-	(*ListServicesRequest)(nil),   // 4: projects.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),  // 5: projects.v1.ListServicesResponse
-	(*CreateServiceRequest)(nil),  // 6: projects.v1.CreateServiceRequest
-	(*CreateServiceResponse)(nil), // 7: projects.v1.CreateServiceResponse
+	(ServiceStatus)(0),               // 0: projects.v1.ServiceStatus
+	(*Service)(nil),                  // 1: projects.v1.Service
+	(*GetServiceRequest)(nil),        // 2: projects.v1.GetServiceRequest
+	(*GetServiceResponse)(nil),       // 3: projects.v1.GetServiceResponse
+	(*ListServicesRequest)(nil),      // 4: projects.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),     // 5: projects.v1.ListServicesResponse
+	(*CreateServiceRequest)(nil),     // 6: projects.v1.CreateServiceRequest
+	(*CreateServiceResponse)(nil),    // 7: projects.v1.CreateServiceResponse
+	(*SetServiceOwnersRequest)(nil),  // 8: projects.v1.SetServiceOwnersRequest
+	(*SetServiceOwnersResponse)(nil), // 9: projects.v1.SetServiceOwnersResponse
 }
 var file_projects_v1_projects_proto_depIdxs = []int32{
 	0, // 0: projects.v1.Service.status:type_name -> projects.v1.ServiceStatus
@@ -561,11 +740,13 @@ var file_projects_v1_projects_proto_depIdxs = []int32{
 	2, // 4: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
 	4, // 5: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
 	6, // 6: projects.v1.ProjectsService.CreateService:input_type -> projects.v1.CreateServiceRequest
-	3, // 7: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
-	5, // 8: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
-	7, // 9: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
+	8, // 7: projects.v1.ProjectsService.SetServiceOwners:input_type -> projects.v1.SetServiceOwnersRequest
+	3, // 8: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
+	5, // 9: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
+	7, // 10: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
+	9, // 11: projects.v1.ProjectsService.SetServiceOwners:output_type -> projects.v1.SetServiceOwnersResponse
+	8, // [8:12] is the sub-list for method output_type
+	4, // [4:8] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
 	4, // [4:4] is the sub-list for extension extendee
 	0, // [0:4] is the sub-list for field type_name
@@ -582,7 +763,7 @@ func file_projects_v1_projects_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_projects_v1_projects_proto_rawDesc), len(file_projects_v1_projects_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

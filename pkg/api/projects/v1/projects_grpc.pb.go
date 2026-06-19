@@ -24,9 +24,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProjectsService_GetService_FullMethodName    = "/projects.v1.ProjectsService/GetService"
-	ProjectsService_ListServices_FullMethodName  = "/projects.v1.ProjectsService/ListServices"
-	ProjectsService_CreateService_FullMethodName = "/projects.v1.ProjectsService/CreateService"
+	ProjectsService_GetService_FullMethodName       = "/projects.v1.ProjectsService/GetService"
+	ProjectsService_ListServices_FullMethodName     = "/projects.v1.ProjectsService/ListServices"
+	ProjectsService_CreateService_FullMethodName    = "/projects.v1.ProjectsService/CreateService"
+	ProjectsService_SetServiceOwners_FullMethodName = "/projects.v1.ProjectsService/SetServiceOwners"
 )
 
 // ProjectsServiceClient is the client API for ProjectsService service.
@@ -51,6 +52,14 @@ type ProjectsServiceClient interface {
 	// асинхронно worker'ом; финальный статус (ACTIVE/FAILED) — по завершении
 	// workflow. BREAKING: добавление метода в существующий сервис-контракт.
 	CreateService(ctx context.Context, in *CreateServiceRequest, opts ...grpc.CallOption) (*CreateServiceResponse, error)
+	// SetServiceOwners декларативно заменяет набор владельцев сервиса: клиент шлёт
+	// полный желаемый набор owners и ожидаемую версию owners_version
+	// (optimistic-concurrency). Сервер вычисляет diff и запускает Temporal-workflow
+	// «Изменение владельцев» с детерминированным WorkflowID (идемпотентность
+	// повторного запуска). Синхронизация GitLab/Vault/IDM выполняется асинхронно
+	// worker'ом. Конфликт версии → FailedPrecondition; отсутствие записи →
+	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
+	SetServiceOwners(ctx context.Context, in *SetServiceOwnersRequest, opts ...grpc.CallOption) (*SetServiceOwnersResponse, error)
 }
 
 type projectsServiceClient struct {
@@ -91,6 +100,16 @@ func (c *projectsServiceClient) CreateService(ctx context.Context, in *CreateSer
 	return out, nil
 }
 
+func (c *projectsServiceClient) SetServiceOwners(ctx context.Context, in *SetServiceOwnersRequest, opts ...grpc.CallOption) (*SetServiceOwnersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetServiceOwnersResponse)
+	err := c.cc.Invoke(ctx, ProjectsService_SetServiceOwners_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProjectsServiceServer is the server API for ProjectsService service.
 // All implementations must embed UnimplementedProjectsServiceServer
 // for forward compatibility.
@@ -113,6 +132,14 @@ type ProjectsServiceServer interface {
 	// асинхронно worker'ом; финальный статус (ACTIVE/FAILED) — по завершении
 	// workflow. BREAKING: добавление метода в существующий сервис-контракт.
 	CreateService(context.Context, *CreateServiceRequest) (*CreateServiceResponse, error)
+	// SetServiceOwners декларативно заменяет набор владельцев сервиса: клиент шлёт
+	// полный желаемый набор owners и ожидаемую версию owners_version
+	// (optimistic-concurrency). Сервер вычисляет diff и запускает Temporal-workflow
+	// «Изменение владельцев» с детерминированным WorkflowID (идемпотентность
+	// повторного запуска). Синхронизация GitLab/Vault/IDM выполняется асинхронно
+	// worker'ом. Конфликт версии → FailedPrecondition; отсутствие записи →
+	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
+	SetServiceOwners(context.Context, *SetServiceOwnersRequest) (*SetServiceOwnersResponse, error)
 	mustEmbedUnimplementedProjectsServiceServer()
 }
 
@@ -131,6 +158,9 @@ func (UnimplementedProjectsServiceServer) ListServices(context.Context, *ListSer
 }
 func (UnimplementedProjectsServiceServer) CreateService(context.Context, *CreateServiceRequest) (*CreateServiceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateService not implemented")
+}
+func (UnimplementedProjectsServiceServer) SetServiceOwners(context.Context, *SetServiceOwnersRequest) (*SetServiceOwnersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetServiceOwners not implemented")
 }
 func (UnimplementedProjectsServiceServer) mustEmbedUnimplementedProjectsServiceServer() {}
 func (UnimplementedProjectsServiceServer) testEmbeddedByValue()                         {}
@@ -207,6 +237,24 @@ func _ProjectsService_CreateService_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProjectsService_SetServiceOwners_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetServiceOwnersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectsServiceServer).SetServiceOwners(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectsService_SetServiceOwners_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectsServiceServer).SetServiceOwners(ctx, req.(*SetServiceOwnersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProjectsService_ServiceDesc is the grpc.ServiceDesc for ProjectsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -225,6 +273,10 @@ var ProjectsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateService",
 			Handler:    _ProjectsService_CreateService_Handler,
+		},
+		{
+			MethodName: "SetServiceOwners",
+			Handler:    _ProjectsService_SetServiceOwners_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

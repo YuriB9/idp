@@ -231,3 +231,60 @@ func TestIntegrationKeyset(t *testing.T) {
 		t.Fatalf("ожидали ErrValidation, получили %v", err)
 	}
 }
+
+// TestIntegrationSetOwners проверяет замену владельцев: применение diff,
+// инкремент версии, отражение в Get, идемпотентность и guarded-CAS-конфликт по
+// устаревшей версии.
+func TestIntegrationSetOwners(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	repo := New(pool)
+	ctx := context.Background()
+	const project = "it-owners"
+	cleanupProject(t, pool, project)
+	defer cleanupProject(t, pool, project)
+
+	id := uuid.New()
+	if err := repo.Create(ctx, Service{ID: id, Project: project, Name: "svc", Status: StatusActive}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+
+	// Замена набора с версии 0 → {alice, bob}, версия становится 1.
+	owners, ver, err := repo.SetOwners(ctx, id, []string{"bob", "alice"}, 0)
+	if err != nil {
+		t.Fatalf("SetOwners: %v", err)
+	}
+	if ver != 1 || len(owners) != 2 || owners[0] != "alice" || owners[1] != "bob" {
+		t.Fatalf("ожидали [alice bob] v1, получили %v v%d", owners, ver)
+	}
+
+	// Отражение в Get: owners и версия.
+	got, err := repo.GetByName(ctx, project, "svc")
+	if err != nil {
+		t.Fatalf("GetByName: %v", err)
+	}
+	if got.OwnersVersion != 1 || len(got.Owners) != 2 || got.Owners[0] != "alice" || got.Owners[1] != "bob" {
+		t.Fatalf("Get: owners=%v ver=%d", got.Owners, got.OwnersVersion)
+	}
+
+	// Конфликт guarded-CAS: устаревшая версия 0.
+	if _, _, cerr := repo.SetOwners(ctx, id, []string{"carol"}, 0); !errors.Is(cerr, errs.ErrConflict) {
+		t.Fatalf("ожидали ErrConflict на устаревшей версии, получили %v", cerr)
+	}
+
+	// Идемпотентная замена тем же набором с актуальной версией 1 → версия 2,
+	// состав не меняется.
+	owners2, ver2, err := repo.SetOwners(ctx, id, []string{"alice", "bob"}, 1)
+	if err != nil {
+		t.Fatalf("идемпотентный SetOwners: %v", err)
+	}
+	if ver2 != 2 || len(owners2) != 2 {
+		t.Fatalf("ожидали [alice bob] v2, получили %v v%d", owners2, ver2)
+	}
+
+	// Несуществующий сервис → ErrNotFound.
+	if _, _, nerr := repo.SetOwners(ctx, uuid.New(), []string{"x"}, 0); !errors.Is(nerr, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", nerr)
+	}
+}

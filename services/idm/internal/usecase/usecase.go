@@ -60,3 +60,50 @@ func (a *Authorizer) CheckAccess(ctx context.Context, subject, resource, action 
 	}
 	return v.(bool), nil
 }
+
+// RoleStore — зависимость управления ролями (выдача/отзыв привязок субъект↔роль).
+type RoleStore interface {
+	AssignRole(ctx context.Context, subject, role string) error
+	RevokeRole(ctx context.Context, subject, role string) error
+}
+
+// SubjectInvalidator инвалидирует кэш решений по затронутому субъекту.
+type SubjectInvalidator interface {
+	InvalidateSubject(ctx context.Context, subject string) error
+}
+
+// RoleManager управляет привязками ролей с обязательной инвалидацией кэша
+// решений по затронутому субъекту (не оставлять устаревшие allow/deny).
+type RoleManager struct {
+	store RoleStore
+	cache SubjectInvalidator
+}
+
+// NewRoleManager создаёт менеджер ролей поверх стора и инвалидатора кэша.
+func NewRoleManager(store RoleStore, cache SubjectInvalidator) *RoleManager {
+	return &RoleManager{store: store, cache: cache}
+}
+
+// AssignRole выдаёт роль и инвалидирует кэш субъекта. Ошибка инвалидации
+// возвращается (вызывающий ретраит идемпотентно), чтобы не оставить устаревшее
+// решение в кэше.
+func (m *RoleManager) AssignRole(ctx context.Context, subject, role string) error {
+	if err := m.store.AssignRole(ctx, subject, role); err != nil {
+		return fmt.Errorf("usecase: выдача роли: %w", err)
+	}
+	if err := m.cache.InvalidateSubject(ctx, subject); err != nil {
+		return fmt.Errorf("usecase: инвалидация кэша после выдачи роли: %w", err)
+	}
+	return nil
+}
+
+// RevokeRole отзывает роль и инвалидирует кэш субъекта.
+func (m *RoleManager) RevokeRole(ctx context.Context, subject, role string) error {
+	if err := m.store.RevokeRole(ctx, subject, role); err != nil {
+		return fmt.Errorf("usecase: отзыв роли: %w", err)
+	}
+	if err := m.cache.InvalidateSubject(ctx, subject); err != nil {
+		return fmt.Errorf("usecase: инвалидация кэша после отзыва роли: %w", err)
+	}
+	return nil
+}

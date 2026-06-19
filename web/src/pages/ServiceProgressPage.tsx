@@ -9,6 +9,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide
 import { apiClient } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/StatusBadge";
+import { OwnersCard } from "@/components/OwnersCard";
 
 // POLL_INTERVAL_MS — интервал поллинга статуса (см. design.md, стратегия).
 const POLL_INTERVAL_MS = 1500;
@@ -96,6 +97,17 @@ export function ServiceProgressPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Владельцы сервиса: отображение и форма изменения (доступны при наличии
+          данных сервиса; смена владельцев требует права change_owners). */}
+      {query.data && (
+        <OwnersCard
+          project={project}
+          name={name}
+          owners={query.data.owners}
+          ownersVersion={query.data.owners_version}
+        />
+      )}
     </section>
   );
 }

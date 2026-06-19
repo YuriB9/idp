@@ -31,8 +31,10 @@ func serviceToProto(s repository.Service) (*projectsv1.Service, error) {
 		return nil, err
 	}
 	return &projectsv1.Service{
-		Project: s.Project,
-		Name:    s.Name,
-		Status:  st,
+		Project:       s.Project,
+		Name:          s.Name,
+		Status:        st,
+		Owners:        s.Owners,
+		OwnersVersion: s.OwnersVersion,
 	}, nil
 }

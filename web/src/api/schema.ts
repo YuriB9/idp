@@ -56,6 +56,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project}/services/{name}/owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Декларативная замена набора владельцев сервиса
+         * @description Заменяет набор владельцев целиком (идемпотентно). Клиент передаёт полный желаемый набор owners и текущую версию owners_version (optimistic-concurrency). Несовпадение версии → 409; отсутствие сервиса → 404; отказ RBAC (право change_owners) → 403.
+         */
+        put: operations["setServiceOwners"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -73,6 +93,13 @@ export interface components {
             project: string;
             name: string;
             status: components["schemas"]["ServiceStatus"];
+            /** @description Набор владельцев сервиса (детерминированный порядок). */
+            owners: string[];
+            /**
+             * Format: int64
+             * @description Версия набора владельцев для optimistic-concurrency.
+             */
+            owners_version: number;
         };
         ServiceList: {
             services: components["schemas"]["ServiceSummary"][];
@@ -87,6 +114,24 @@ export interface components {
             /** @description Идентификатор созданной записи каталога. */
             id: string;
             status: components["schemas"]["ServiceStatus"];
+        };
+        SetServiceOwnersRequest: {
+            /** @description Полный желаемый набор владельцев (декларативно). Без пустых строк и дублей; сервер вычисляет diff против текущего состояния. */
+            owners: string[];
+            /**
+             * Format: int64
+             * @description Ожидаемая версия набора владельцев (optimistic-concurrency).
+             */
+            owners_version: number;
+        };
+        SetServiceOwnersResult: {
+            /** @description Итоговый набор владельцев после применения. */
+            owners: string[];
+            /**
+             * Format: int64
+             * @description Новая версия набора владельцев.
+             */
+            owners_version: number;
         };
         Error: {
             /** @description Стабильное сообщение об ошибке для клиента. Внутренние детали (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера. */
@@ -114,6 +159,15 @@ export interface components {
         };
         /** @description Конфликт состояния (например, имя сервиса уже занято) */
         Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Доступ запрещён (RBAC, fail-closed) */
+        Forbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -236,6 +290,39 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    setServiceOwners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+                /** @description Имя сервиса внутри проекта. */
+                name: components["parameters"]["ServiceNamePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetServiceOwnersRequest"];
+            };
+        };
+        responses: {
+            /** @description Изменение владельцев запущено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetServiceOwnersResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
 }

@@ -5,9 +5,13 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/YuriB9/idp/pkg/errs"
 )
 
 // Repo читает модель RBAC из Postgres.
@@ -38,6 +42,37 @@ SELECT EXISTS (
 		return false, fmt.Errorf("repository: запрос решения RBAC: %w", err)
 	}
 	return allowed, nil
+}
+
+// AssignRole выдаёт субъекту роль по её имени (идемпотентно: повторная выдача —
+// no-op через ON CONFLICT DO NOTHING). Несуществующая роль → errs.ErrNotFound
+// (без создания «висячих» привязок).
+func (r *Repo) AssignRole(ctx context.Context, subject, role string) error {
+	var roleID string
+	if err := r.pool.QueryRow(ctx, `SELECT id FROM roles WHERE name = $1`, role).Scan(&roleID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("repository: роль %q не найдена: %w", role, errs.ErrNotFound)
+		}
+		return fmt.Errorf("repository: поиск роли: %w", err)
+	}
+	if _, err := r.pool.Exec(ctx,
+		`INSERT INTO subject_roles (subject, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		subject, roleID); err != nil {
+		return fmt.Errorf("repository: выдача роли: %w", err)
+	}
+	return nil
+}
+
+// RevokeRole отзывает у субъекта роль по её имени (идемпотентно: отзыв
+// отсутствующей привязки или несуществующей роли — успех, 0 затронутых строк).
+func (r *Repo) RevokeRole(ctx context.Context, subject, role string) error {
+	if _, err := r.pool.Exec(ctx,
+		`DELETE FROM subject_roles
+		 WHERE subject = $1 AND role_id IN (SELECT id FROM roles WHERE name = $2)`,
+		subject, role); err != nil {
+		return fmt.Errorf("repository: отзыв роли: %w", err)
+	}
+	return nil
 }
 
 // Ping проверяет доступность БД (для content-aware /readyz).

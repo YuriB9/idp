@@ -9,7 +9,13 @@ const ServiceStatus = z.enum([
   "failed",
 ]);
 const ServiceSummary = z
-  .object({ project: z.string(), name: z.string(), status: ServiceStatus })
+  .object({
+    project: z.string(),
+    name: z.string(),
+    status: ServiceStatus,
+    owners: z.array(z.string()),
+    owners_version: z.number().int(),
+  })
   .passthrough();
 const ServiceList = z
   .object({ services: z.array(ServiceSummary), next_page_token: z.string() })
@@ -21,6 +27,15 @@ const CreateServiceRequest = z
 const CreateServiceResult = z
   .object({ id: z.string(), status: ServiceStatus })
   .passthrough();
+const SetServiceOwnersRequest = z
+  .object({
+    owners: z.array(z.string().min(1)),
+    owners_version: z.number().int(),
+  })
+  .passthrough();
+const SetServiceOwnersResult = z
+  .object({ owners: z.array(z.string()), owners_version: z.number().int() })
+  .passthrough();
 
 export const schemas = {
   HealthStatus,
@@ -30,6 +45,8 @@ export const schemas = {
   Error,
   CreateServiceRequest,
   CreateServiceResult,
+  SetServiceOwnersRequest,
+  SetServiceOwnersResult,
 };
 
 const endpoints = makeApi([
@@ -124,6 +141,54 @@ const endpoints = makeApi([
       {
         status: 404,
         description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/projects/:project/services/:name/owners",
+    alias: "setServiceOwners",
+    description: `Заменяет набор владельцев целиком (идемпотентно). Клиент передаёт полный желаемый набор owners и текущую версию owners_version (optimistic-concurrency). Несовпадение версии → 409; отсутствие сервиса → 404; отказ RBAC (право change_owners) → 403.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: SetServiceOwnersRequest,
+      },
+      {
+        name: "project",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: SetServiceOwnersResult,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 409,
+        description: `Конфликт состояния (например, имя сервиса уже занято)`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],

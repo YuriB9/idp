@@ -16,16 +16,46 @@ type Memory struct {
 	harbor    map[string]bool
 	vault     map[string]bool
 	variables map[string]map[string]string
+	// members — участники репозитория GitLab по ключу сервиса (владельцы).
+	members map[string]map[string]bool
+	// vaultOwners — субъекты с доступом по политике Vault по ключу сервиса.
+	vaultOwners map[string]map[string]bool
 }
 
 // NewMemory создаёт пустой in-memory набор клиентов.
 func NewMemory() *Memory {
 	return &Memory{
-		repos:     map[string]bool{},
-		harbor:    map[string]bool{},
-		vault:     map[string]bool{},
-		variables: map[string]map[string]string{},
+		repos:       map[string]bool{},
+		harbor:      map[string]bool{},
+		vault:       map[string]bool{},
+		variables:   map[string]map[string]string{},
+		members:     map[string]map[string]bool{},
+		vaultOwners: map[string]map[string]bool{},
 	}
+}
+
+// applyDiff применяет add/remove к множеству set[k] (создаёт при необходимости).
+func applyDiff(store map[string]map[string]bool, k string, add, remove []string) {
+	set := store[k]
+	if set == nil {
+		set = map[string]bool{}
+		store[k] = set
+	}
+	for _, a := range add {
+		set[a] = true
+	}
+	for _, r := range remove {
+		delete(set, r)
+	}
+}
+
+// replaceSet заменяет множество store[k] на previous (идемпотентная компенсация).
+func replaceSet(store map[string]map[string]bool, k string, previous []string) {
+	set := map[string]bool{}
+	for _, p := range previous {
+		set[p] = true
+	}
+	store[k] = set
 }
 
 // Clients возвращает набор интерфейсов, обслуживаемых этим Memory.
@@ -48,6 +78,20 @@ func (m *Memory) DeleteRepo(_ context.Context, ref provisioning.ResourceRef) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.repos, key(ref)) // идемпотентно: delete отсутствующего — no-op
+	return nil
+}
+
+func (m *Memory) SyncMembers(_ context.Context, ref provisioning.ResourceRef, add, remove []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	applyDiff(m.members, key(ref), add, remove)
+	return nil
+}
+
+func (m *Memory) RestoreMembers(_ context.Context, ref provisioning.ResourceRef, previous []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	replaceSet(m.members, key(ref), previous)
 	return nil
 }
 
@@ -98,6 +142,20 @@ func (m *Memory) TeardownAppRole(_ context.Context, ref provisioning.ResourceRef
 	return nil
 }
 
+func (m *Memory) SyncOwners(_ context.Context, ref provisioning.ResourceRef, add, remove []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	applyDiff(m.vaultOwners, key(ref), add, remove)
+	return nil
+}
+
+func (m *Memory) RestoreOwners(_ context.Context, ref provisioning.ResourceRef, previous []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	replaceSet(m.vaultOwners, key(ref), previous)
+	return nil
+}
+
 // --- помощники для тестов ---
 
 // HasRepo сообщает, существует ли репозиторий для ref.
@@ -119,4 +177,18 @@ func (m *Memory) HasVault(ref provisioning.ResourceRef) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.vault[key(ref)]
+}
+
+// HasMember сообщает, входит ли subject в участники репозитория для ref.
+func (m *Memory) HasMember(ref provisioning.ResourceRef, subject string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.members[key(ref)][subject]
+}
+
+// HasVaultOwner сообщает, есть ли у subject доступ по политике Vault для ref.
+func (m *Memory) HasVaultOwner(ref provisioning.ResourceRef, subject string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.vaultOwners[key(ref)][subject]
 }

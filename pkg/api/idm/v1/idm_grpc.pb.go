@@ -131,3 +131,163 @@ var AccessService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "idm/v1/idm.proto",
 }
+
+const (
+	RoleAdminService_AssignRole_FullMethodName = "/idm.v1.RoleAdminService/AssignRole"
+	RoleAdminService_RevokeRole_FullMethodName = "/idm.v1.RoleAdminService/RevokeRole"
+)
+
+// RoleAdminServiceClient is the client API for RoleAdminService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// RoleAdminService — управляющий контракт ролей: программная выдача/отзыв роли
+// субъекту для синхронизации из доменных потоков (например, «Изменение
+// владельцев»). После изменения привязок IDM инвалидирует кэш решений по
+// затронутому субъекту. Путь не публичный (не периметр); вызывается доменными
+// сервисами/worker'ом. BREAKING: добавление сервиса в существующий контракт idm.
+type RoleAdminServiceClient interface {
+	// AssignRole выдаёт субъекту роль (идемпотентно: повторная выдача — успех).
+	// Несуществующая роль → NotFound; пустые поля → InvalidArgument.
+	AssignRole(ctx context.Context, in *AssignRoleRequest, opts ...grpc.CallOption) (*AssignRoleResponse, error)
+	// RevokeRole отзывает у субъекта роль (идемпотентно: отзыв отсутствующей — успех).
+	// Пустые поля → InvalidArgument.
+	RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*RevokeRoleResponse, error)
+}
+
+type roleAdminServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRoleAdminServiceClient(cc grpc.ClientConnInterface) RoleAdminServiceClient {
+	return &roleAdminServiceClient{cc}
+}
+
+func (c *roleAdminServiceClient) AssignRole(ctx context.Context, in *AssignRoleRequest, opts ...grpc.CallOption) (*AssignRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssignRoleResponse)
+	err := c.cc.Invoke(ctx, RoleAdminService_AssignRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *roleAdminServiceClient) RevokeRole(ctx context.Context, in *RevokeRoleRequest, opts ...grpc.CallOption) (*RevokeRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeRoleResponse)
+	err := c.cc.Invoke(ctx, RoleAdminService_RevokeRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RoleAdminServiceServer is the server API for RoleAdminService service.
+// All implementations must embed UnimplementedRoleAdminServiceServer
+// for forward compatibility.
+//
+// RoleAdminService — управляющий контракт ролей: программная выдача/отзыв роли
+// субъекту для синхронизации из доменных потоков (например, «Изменение
+// владельцев»). После изменения привязок IDM инвалидирует кэш решений по
+// затронутому субъекту. Путь не публичный (не периметр); вызывается доменными
+// сервисами/worker'ом. BREAKING: добавление сервиса в существующий контракт idm.
+type RoleAdminServiceServer interface {
+	// AssignRole выдаёт субъекту роль (идемпотентно: повторная выдача — успех).
+	// Несуществующая роль → NotFound; пустые поля → InvalidArgument.
+	AssignRole(context.Context, *AssignRoleRequest) (*AssignRoleResponse, error)
+	// RevokeRole отзывает у субъекта роль (идемпотентно: отзыв отсутствующей — успех).
+	// Пустые поля → InvalidArgument.
+	RevokeRole(context.Context, *RevokeRoleRequest) (*RevokeRoleResponse, error)
+	mustEmbedUnimplementedRoleAdminServiceServer()
+}
+
+// UnimplementedRoleAdminServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRoleAdminServiceServer struct{}
+
+func (UnimplementedRoleAdminServiceServer) AssignRole(context.Context, *AssignRoleRequest) (*AssignRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AssignRole not implemented")
+}
+func (UnimplementedRoleAdminServiceServer) RevokeRole(context.Context, *RevokeRoleRequest) (*RevokeRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeRole not implemented")
+}
+func (UnimplementedRoleAdminServiceServer) mustEmbedUnimplementedRoleAdminServiceServer() {}
+func (UnimplementedRoleAdminServiceServer) testEmbeddedByValue()                          {}
+
+// UnsafeRoleAdminServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RoleAdminServiceServer will
+// result in compilation errors.
+type UnsafeRoleAdminServiceServer interface {
+	mustEmbedUnimplementedRoleAdminServiceServer()
+}
+
+func RegisterRoleAdminServiceServer(s grpc.ServiceRegistrar, srv RoleAdminServiceServer) {
+	// If the following call panics, it indicates UnimplementedRoleAdminServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RoleAdminService_ServiceDesc, srv)
+}
+
+func _RoleAdminService_AssignRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssignRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoleAdminServiceServer).AssignRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RoleAdminService_AssignRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoleAdminServiceServer).AssignRole(ctx, req.(*AssignRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RoleAdminService_RevokeRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoleAdminServiceServer).RevokeRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RoleAdminService_RevokeRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoleAdminServiceServer).RevokeRole(ctx, req.(*RevokeRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RoleAdminService_ServiceDesc is the grpc.ServiceDesc for RoleAdminService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RoleAdminService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "idm.v1.RoleAdminService",
+	HandlerType: (*RoleAdminServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AssignRole",
+			Handler:    _RoleAdminService_AssignRole_Handler,
+		},
+		{
+			MethodName: "RevokeRole",
+			Handler:    _RoleAdminService_RevokeRole_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "idm/v1/idm.proto",
+}

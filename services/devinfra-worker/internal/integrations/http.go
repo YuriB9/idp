@@ -143,6 +143,34 @@ func (c *gitLabHTTP) InjectVariables(ctx context.Context, in provisioning.Inject
 	return nil
 }
 
+func (c *gitLabHTTP) SyncMembers(ctx context.Context, ref provisioning.ResourceRef, add, remove []string) error {
+	// Идемпотентность: при добавлении 409 (участник уже есть) — успех; при
+	// удалении 404 (участника нет) — успех. Реальный GitLab резолвит логины в
+	// user_id; в моке достаточно имени пользователя.
+	proj := ref.Project + "%2F" + ref.Name
+	for _, user := range add {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/members", c.base, proj)
+		body := map[string]string{"username": user, "access_level": "40"}
+		if err := c.doer.call(ctx, http.MethodPost, url, body, nil, http.StatusConflict); err != nil {
+			return err
+		}
+	}
+	for _, user := range remove {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/members/%s", c.base, proj, user)
+		if err := c.doer.call(ctx, http.MethodDelete, url, nil, nil, http.StatusNotFound); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *gitLabHTTP) RestoreMembers(ctx context.Context, ref provisioning.ResourceRef, previous []string) error {
+	// Компенсация: декларативно восстанавливаем прежний состав. В моке это
+	// идемпотентное повторное добавление прежних участников (без вычисления
+	// удалений — текущее расхождение незначимо для стенда).
+	return c.SyncMembers(ctx, ref, previous, nil)
+}
+
 // --- Harbor ---
 
 type harborHTTP struct {
@@ -232,4 +260,29 @@ func (c *vaultHTTP) TeardownAppRole(ctx context.Context, ref provisioning.Resour
 		return err
 	}
 	return c.doer.call(ctx, http.MethodDelete, c.base+"/v1/sys/policies/acl/"+role, nil, nil, http.StatusNotFound)
+}
+
+func (c *vaultHTTP) SyncOwners(ctx context.Context, ref provisioning.ResourceRef, add, remove []string) error {
+	// Идемпотентность: PUT entity-alias на каждого добавленного владельца (409 —
+	// успех), DELETE на каждого удалённого (404 — успех). В моке достаточно имени.
+	role := ref.Project + "-" + ref.Name
+	for _, user := range add {
+		url := fmt.Sprintf("%s/v1/identity/entity/name/%s-%s", c.base, role, user)
+		body := map[string]any{"policies": []string{role}}
+		if err := c.doer.call(ctx, http.MethodPut, url, body, nil, http.StatusConflict); err != nil {
+			return err
+		}
+	}
+	for _, user := range remove {
+		url := fmt.Sprintf("%s/v1/identity/entity/name/%s-%s", c.base, role, user)
+		if err := c.doer.call(ctx, http.MethodDelete, url, nil, nil, http.StatusNotFound); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *vaultHTTP) RestoreOwners(ctx context.Context, ref provisioning.ResourceRef, previous []string) error {
+	// Компенсация: восстановить прежний доступ (идемпотентно).
+	return c.SyncOwners(ctx, ref, previous, nil)
 }

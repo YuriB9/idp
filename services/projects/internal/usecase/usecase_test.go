@@ -45,11 +45,24 @@ type fakeStarter struct {
 	gotProject   string
 	gotName      string
 	called       bool
+
+	// поля для StartChangeOwners
+	ownersCalled   bool
+	gotDesired     []string
+	gotPrevious    []string
+	gotExpectedVer int64
 }
 
 func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string) error {
 	f.called = true
 	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
+	return f.err
+}
+
+func (f *fakeStarter) StartChangeOwners(_ context.Context, serviceID, project, name string, desired, previous []string, expectedVersion int64) error {
+	f.ownersCalled = true
+	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
+	f.gotDesired, f.gotPrevious, f.gotExpectedVer = desired, previous, expectedVersion
 	return f.err
 }
 
@@ -116,6 +129,95 @@ func TestCreateService_NoStarterConfigured(t *testing.T) {
 	uc := usecase.New(newMemStore())
 	if _, err := uc.CreateService(context.Background(), "proj", "svc"); err == nil {
 		t.Fatal("ожидали ошибку при отсутствии starter")
+	}
+}
+
+// TestSetServiceOwners_StartsWorkflow: при непустом diff запускается workflow
+// смены владельцев с нормализованным desired, previous и версией; возвращается
+// проектируемое состояние (desired + version+1).
+func TestSetServiceOwners_StartsWorkflow(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	id := uuid.New()
+	if err := store.Create(ctx, repository.Service{ID: id, Project: "p", Name: "n", Status: repository.StatusActive, Owners: []string{"alice"}, OwnersVersion: 2}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	// Передаём с дублями и в произвольном порядке — usecase нормализует.
+	owners, ver, err := uc.SetServiceOwners(ctx, "p", "n", []string{"bob", "alice", "bob"}, 2)
+	if err != nil {
+		t.Fatalf("SetServiceOwners: %v", err)
+	}
+	if !starter.ownersCalled {
+		t.Fatal("ожидали запуск workflow смены владельцев")
+	}
+	if ver != 3 || len(owners) != 2 || owners[0] != "alice" || owners[1] != "bob" {
+		t.Fatalf("ответ owners=%v ver=%d, ожидали [alice bob] v3", owners, ver)
+	}
+	if len(starter.gotDesired) != 2 || starter.gotExpectedVer != 2 {
+		t.Fatalf("в workflow переданы неверные аргументы: %+v", starter)
+	}
+}
+
+// TestSetServiceOwners_VersionConflict: устаревшая версия → ErrConflict без
+// запуска workflow.
+func TestSetServiceOwners_VersionConflict(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	id := uuid.New()
+	if err := store.Create(ctx, repository.Service{ID: id, Project: "p", Name: "n", Status: repository.StatusActive, OwnersVersion: 5}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	if _, _, err := uc.SetServiceOwners(ctx, "p", "n", []string{"alice"}, 4); !errors.Is(err, errs.ErrConflict) {
+		t.Fatalf("ожидали ErrConflict, получили %v", err)
+	}
+	if starter.ownersCalled {
+		t.Fatal("workflow не должен стартовать при конфликте версии")
+	}
+}
+
+// TestSetServiceOwners_NoOp: при совпадении желаемого набора с текущим workflow
+// не стартует (идемпотентный no-op), версия не меняется.
+func TestSetServiceOwners_NoOp(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	id := uuid.New()
+	if err := store.Create(ctx, repository.Service{ID: id, Project: "p", Name: "n", Status: repository.StatusActive, Owners: []string{"alice", "bob"}, OwnersVersion: 1}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	owners, ver, err := uc.SetServiceOwners(ctx, "p", "n", []string{"bob", "alice"}, 1)
+	if err != nil {
+		t.Fatalf("SetServiceOwners: %v", err)
+	}
+	if starter.ownersCalled {
+		t.Fatal("workflow не должен стартовать при пустом diff")
+	}
+	if ver != 1 || len(owners) != 2 {
+		t.Fatalf("ожидали неизменную версию 1 и [alice bob], получили %v v%d", owners, ver)
+	}
+}
+
+// TestSetServiceOwners_NotFound: отсутствующий сервис → ErrNotFound.
+func TestSetServiceOwners_NotFound(t *testing.T) {
+	t.Parallel()
+
+	uc := usecase.New(newMemStore(), usecase.WithStarter(&fakeStarter{}))
+	if _, _, err := uc.SetServiceOwners(context.Background(), "p", "missing", []string{"a"}, 0); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", err)
 	}
 }
 

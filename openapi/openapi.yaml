@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: IDP Perimeter API
-  version: 0.2.0
+  version: 0.3.0
   description: >
     Контракт периметра (портал ↔ API-шлюз) платформы IDP. Источник правды для
     кодогена TS-клиента и zod-схем (ADR-0002, ADR-0009, docs/IDP_MVP_plan.md,
@@ -93,6 +93,39 @@ paths:
                 $ref: "#/components/schemas/ServiceSummary"
         "404":
           $ref: "#/components/responses/NotFound"
+  /projects/{project}/services/{name}/owners:
+    put:
+      operationId: setServiceOwners
+      summary: Декларативная замена набора владельцев сервиса
+      description: >
+        Заменяет набор владельцев целиком (идемпотентно). Клиент передаёт полный
+        желаемый набор owners и текущую версию owners_version
+        (optimistic-concurrency). Несовпадение версии → 409; отсутствие сервиса →
+        404; отказ RBAC (право change_owners) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetServiceOwnersRequest"
+      responses:
+        "200":
+          description: Изменение владельцев запущено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetServiceOwnersResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 components:
   parameters:
     ProjectPath:
@@ -130,6 +163,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Доступ запрещён (RBAC, fail-closed)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthStatus:
       type: object
@@ -144,7 +183,7 @@ components:
       enum: [creating, active, decommissioned, failed]
     ServiceSummary:
       type: object
-      required: [project, name, status]
+      required: [project, name, status, owners, owners_version]
       properties:
         project:
           type: string
@@ -152,6 +191,15 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/ServiceStatus"
+        owners:
+          type: array
+          description: Набор владельцев сервиса (детерминированный порядок).
+          items:
+            type: string
+        owners_version:
+          type: integer
+          format: int64
+          description: Версия набора владельцев для optimistic-concurrency.
     ServiceList:
       type: object
       required: [services, next_page_token]
@@ -180,6 +228,35 @@ components:
           description: Идентификатор созданной записи каталога.
         status:
           $ref: "#/components/schemas/ServiceStatus"
+    SetServiceOwnersRequest:
+      type: object
+      required: [owners, owners_version]
+      properties:
+        owners:
+          type: array
+          description: >
+            Полный желаемый набор владельцев (декларативно). Без пустых строк и
+            дублей; сервер вычисляет diff против текущего состояния.
+          items:
+            type: string
+            minLength: 1
+        owners_version:
+          type: integer
+          format: int64
+          description: Ожидаемая версия набора владельцев (optimistic-concurrency).
+    SetServiceOwnersResult:
+      type: object
+      required: [owners, owners_version]
+      properties:
+        owners:
+          type: array
+          description: Итоговый набор владельцев после применения.
+          items:
+            type: string
+        owners_version:
+          type: integer
+          format: int64
+          description: Новая версия набора владельцев.
     Error:
       type: object
       required: [error]

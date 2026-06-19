@@ -24,6 +24,7 @@ import (
 	"github.com/YuriB9/idp/pkg/auth"
 	"github.com/YuriB9/idp/pkg/config"
 	"github.com/YuriB9/idp/pkg/db"
+	"github.com/YuriB9/idp/pkg/errs"
 	"github.com/YuriB9/idp/pkg/grpcx"
 	"github.com/YuriB9/idp/pkg/httpserver"
 	"github.com/YuriB9/idp/pkg/logger"
@@ -35,6 +36,53 @@ import (
 // authorizer — зависимость транспорта от usecase-слоя.
 type authorizer interface {
 	CheckAccess(ctx context.Context, subject, resource, action string) (bool, error)
+}
+
+// roleManager — зависимость транспорта RoleAdminService от usecase-слоя.
+type roleManager interface {
+	AssignRole(ctx context.Context, subject, role string) error
+	RevokeRole(ctx context.Context, subject, role string) error
+}
+
+// roleAdminServer реализует gRPC RoleAdminService поверх usecase-слоя. Путь не
+// публичный (вызывается доменными сервисами/worker'ом). Внутренние ошибки
+// клиенту не раскрываются.
+type roleAdminServer struct {
+	idmv1.UnimplementedRoleAdminServiceServer
+	roles roleManager
+	log   *slog.Logger
+}
+
+// AssignRole выдаёт субъекту роль (идемпотентно). Несуществующая роль → NotFound.
+func (s *roleAdminServer) AssignRole(ctx context.Context, req *idmv1.AssignRoleRequest) (*idmv1.AssignRoleResponse, error) {
+	if req.GetSubject() == "" || req.GetRole() == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject и role обязательны")
+	}
+	if err := s.roles.AssignRole(ctx, req.GetSubject(), req.GetRole()); err != nil {
+		return nil, s.mapRoleError("AssignRole", err)
+	}
+	return &idmv1.AssignRoleResponse{}, nil
+}
+
+// RevokeRole отзывает у субъекта роль (идемпотентно).
+func (s *roleAdminServer) RevokeRole(ctx context.Context, req *idmv1.RevokeRoleRequest) (*idmv1.RevokeRoleResponse, error) {
+	if req.GetSubject() == "" || req.GetRole() == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject и role обязательны")
+	}
+	if err := s.roles.RevokeRole(ctx, req.GetSubject(), req.GetRole()); err != nil {
+		return nil, s.mapRoleError("RevokeRole", err)
+	}
+	return &idmv1.RevokeRoleResponse{}, nil
+}
+
+// mapRoleError маппит доменную ошибку управления ролями в gRPC-код без утечки
+// внутренних деталей (детали — в лог по ключу slog "err").
+func (s *roleAdminServer) mapRoleError(method string, err error) error {
+	if errors.Is(err, errs.ErrNotFound) {
+		return status.Error(codes.NotFound, "роль не найдена")
+	}
+	s.log.Error("idm: ошибка управления ролями", slog.String("method", method), logger.Err(err))
+	return status.Error(codes.Unavailable, "управление ролями временно недоступно")
 }
 
 // accessServer реализует gRPC AccessService поверх usecase-слоя. Транспортная
@@ -103,9 +151,11 @@ func run() error {
 	repo := repository.New(pool)
 	decisionCache := cache.New(rdb, ttlAllow, ttlDeny)
 	authz := usecase.New(repo, decisionCache)
+	roles := usecase.NewRoleManager(repo, decisionCache)
 
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{auth: authz, log: log})
+	idmv1.RegisterRoleAdminServiceServer(grpcSrv, &roleAdminServer{roles: roles, log: log})
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {

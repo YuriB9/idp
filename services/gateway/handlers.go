@@ -65,9 +65,23 @@ type errorBody struct {
 
 // serviceSummary — представление сервиса для клиента (схема ServiceSummary).
 type serviceSummary struct {
-	Project string `json:"project"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
+	Project       string   `json:"project"`
+	Name          string   `json:"name"`
+	Status        string   `json:"status"`
+	Owners        []string `json:"owners"`
+	OwnersVersion int64    `json:"owners_version"`
+}
+
+// setOwnersBody — тело запроса смены владельцев (схема SetServiceOwnersRequest).
+type setOwnersBody struct {
+	Owners        []string `json:"owners"`
+	OwnersVersion int64    `json:"owners_version"`
+}
+
+// setOwnersResult — тело ответа смены владельцев (схема SetServiceOwnersResult).
+type setOwnersResult struct {
+	Owners        []string `json:"owners"`
+	OwnersVersion int64    `json:"owners_version"`
 }
 
 // serviceList — страница сервисов с курсором (схема ServiceList).
@@ -94,6 +108,7 @@ func (a *servicesAPI) register(r chi.Router) {
 	r.Post("/projects/{project}/services", a.create)
 	r.Get("/projects/{project}/services", a.list)
 	r.Get("/projects/{project}/services/{name}", a.get)
+	r.Put("/projects/{project}/services/{name}/owners", a.setOwners)
 }
 
 // create — POST /projects/{project}/services: запускает создание сервиса.
@@ -150,10 +165,68 @@ func (a *servicesAPI) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.writeJSON(w, http.StatusOK, serviceSummary{
-		Project: resp.GetProject(),
-		Name:    resp.GetName(),
-		Status:  statusString(resp.GetStatus()),
+		Project:       resp.GetProject(),
+		Name:          resp.GetName(),
+		Status:        statusString(resp.GetStatus()),
+		Owners:        ownersOrEmpty(resp.GetOwners()),
+		OwnersVersion: resp.GetOwnersVersion(),
 	})
+}
+
+// setOwners — PUT /projects/{project}/services/{name}/owners: декларативная замена
+// набора владельцев. RBAC change_owners (fail-closed) до проксирования.
+func (a *servicesAPI) setOwners(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "name")
+
+	// RBAC: проверка права change_owners до любой обработки (fail-closed).
+	if !a.authorize(w, r, project, "change_owners") {
+		return
+	}
+
+	var body setOwnersBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "некорректное тело запроса")
+		return
+	}
+	// Валидация: владельцы непустые и без дублей.
+	seen := map[string]bool{}
+	for _, o := range body.Owners {
+		if o == "" {
+			a.writeError(w, r, http.StatusBadRequest, "владелец не может быть пустым")
+			return
+		}
+		if seen[o] {
+			a.writeError(w, r, http.StatusBadRequest, "владельцы не должны дублироваться")
+			return
+		}
+		seen[o] = true
+	}
+
+	resp, err := a.client.SetServiceOwners(r.Context(), &projectsv1.SetServiceOwnersRequest{
+		Project:         project,
+		Name:            name,
+		Owners:          body.Owners,
+		ExpectedVersion: body.OwnersVersion,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+
+	a.writeJSON(w, http.StatusOK, setOwnersResult{
+		Owners:        ownersOrEmpty(resp.GetOwners()),
+		OwnersVersion: resp.GetOwnersVersion(),
+	})
+}
+
+// ownersOrEmpty гарантирует ненулевой slice (в JSON — [], а не null), чтобы
+// клиентский zod .parse получал ожидаемый массив.
+func ownersOrEmpty(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 // list — GET /projects/{project}/services: keyset-листинг сервисов проекта.
@@ -188,9 +261,11 @@ func (a *servicesAPI) list(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, s := range resp.GetServices() {
 		out.Services = append(out.Services, serviceSummary{
-			Project: s.GetProject(),
-			Name:    s.GetName(),
-			Status:  statusString(s.GetStatus()),
+			Project:       s.GetProject(),
+			Name:          s.GetName(),
+			Status:        statusString(s.GetStatus()),
+			Owners:        ownersOrEmpty(s.GetOwners()),
+			OwnersVersion: s.GetOwnersVersion(),
 		})
 	}
 	a.writeJSON(w, http.StatusOK, out)
