@@ -77,10 +77,10 @@ keyset-пагинацией: query-параметры `page_size` и `page_token
 
 API-шлюз ДОЛЖЕН (MUST) маппить gRPC-коды в HTTP-статусы детерминированно:
 `NotFound`→404, `FailedPrecondition`/`AlreadyExists`→409, `InvalidArgument`→400,
-любой прочий/`Internal`/`Unknown`→500. Шлюз НЕ ДОЛЖЕН (MUST NOT) раскрывать
-клиенту `err.Error()` или внутренние сообщения gRPC; наружу отдаётся только
-стабильное JSON-тело ошибки. В Prometheus-метках (если включены) ДОЛЖЕН (MUST)
-использоваться `RoutePattern()`, а не сырой `URL.Path`.
+`PermissionDenied`→403, любой прочий/`Internal`/`Unknown`→500. Шлюз НЕ ДОЛЖЕН
+(MUST NOT) раскрывать клиенту `err.Error()` или внутренние сообщения gRPC;
+наружу отдаётся только стабильное JSON-тело ошибки. В Prometheus-метках (если
+включены) ДОЛЖЕН (MUST) использоваться `RoutePattern()`, а не сырой `URL.Path`.
 
 #### Scenario: Внутренняя ошибка не утекает
 
@@ -92,27 +92,59 @@ API-шлюз ДОЛЖЕН (MUST) маппить gRPC-коды в HTTP-стату
 #### Scenario: Детерминированный маппинг кодов
 
 - **WHEN** gRPC возвращает один из кодов `NotFound`/`FailedPrecondition`/
-  `InvalidArgument`/`Internal`
-- **THEN** HTTP-статус равен соответственно `404`/`409`/`400`/`500`
+  `InvalidArgument`/`PermissionDenied`/`Internal`
+- **THEN** HTTP-статус равен соответственно `404`/`409`/`400`/`403`/`500`
+
+#### Scenario: Отказ авторизации из projects маппится в 403
+
+- **GIVEN** gRPC `CreateService` вернул `PermissionDenied` (defense-in-depth в
+  `projects`)
+- **WHEN** шлюз формирует HTTP-ответ
+- **THEN** клиент получает 403 со стабильным JSON-телом без внутренних деталей
 
 ### Requirement: Граница авторизации периметра
 
 API-шлюз ДОЛЖЕН (MUST) применять существующие middlewares
-(`RequestID`/`Recoverer`/`RateLimit`/`Auth`) к доменным REST-ручкам и оставлять
-точку для проверки RBAC IDM `CheckAccess` как заглушку (как в gRPC
-`CreateService`), не выполняя реальный RBAC в этом change. Аутентификация на
-периметре ДОЛЖНА (MUST) быть fail-closed; `AUTH_DISABLED` допустим ТОЛЬКО в
-локальном окружении.
+(`RequestID`/`Recoverer`/`RateLimit`/`Auth`) к доменным REST-ручкам И перед
+проксированием к `projects` ДОЛЖЕН (MUST) вызывать IDM `CheckAccess` с
+`subject` из `auth.ClaimsFromContext`, `resource = "project:" + project` и
+`action` по операции (`create` для POST, `read` для GET одного сервиса, `list`
+для GET листинга). Запрос ДОЛЖЕН (MUST) проксироваться к `projects` ТОЛЬКО при
+`allowed=true`. При `allowed=false` ИЛИ недоступности/ошибке вызова IDM шлюз
+ДОЛЖЕН (MUST) отвечать HTTP 403 (fail-closed) со стабильным JSON-телом, НЕ
+раскрывая внутренних деталей. Аутентификация на периметре ДОЛЖНА (MUST) быть
+fail-closed; `AUTH_DISABLED` допустим ТОЛЬКО в локальном окружении.
 
 #### Scenario: Доменные ручки под middlewares периметра
 
-- **WHEN** запрос приходит на `/api/projects/...`
-- **THEN** он проходит через `RequestID`/`Recoverer`/`RateLimit`/`Auth` до
-  вызова gRPC
+- **GIVEN** запрос на `/api/projects/...`
+- **WHEN** он обрабатывается шлюзом
+- **THEN** он проходит через `RequestID`/`Recoverer`/`RateLimit`/`Auth` и вызов
+  IDM `CheckAccess` до проксирования к gRPC `projects`
+
+#### Scenario: Разрешено — запрос проксируется
+
+- **GIVEN** субъект с правом `(create, project:<p>)`
+- **WHEN** клиент шлёт `POST /api/projects/<p>/services`
+- **THEN** IDM возвращает `allowed=true`, и шлюз вызывает gRPC `CreateService`
+
+#### Scenario: Отказ RBAC — 403
+
+- **GIVEN** субъект без права на запрошенное действие/ресурс
+- **WHEN** клиент шлёт доменный запрос
+- **THEN** IDM возвращает `allowed=false`, и шлюз отвечает 403 со стабильным
+  JSON-телом без раскрытия деталей, не вызывая `projects`
+
+#### Scenario: IDM недоступен — fail-closed 403
+
+- **GIVEN** сервис IDM недоступен или вернул ошибку вызова
+- **WHEN** клиент шлёт доменный запрос
+- **THEN** шлюз отвечает 403 (доступ не предоставляется молча) и не проксирует к
+  `projects`
 
 #### Scenario: Fail-closed без локального флага
 
 - **GIVEN** окружение без `AUTH_DISABLED`
 - **WHEN** стартует шлюз без валидной конфигурации проверки токенов
 - **THEN** аутентификация остаётся обязательной (запрос без валидного токена не
-  доходит до gRPC)
+  доходит до RBAC/gRPC)
