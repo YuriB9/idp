@@ -86,5 +86,5 @@
 
 - [x] 8.1 Прогнать локально тесты всех затронутых модулей, golangci-lint
   (включая errname/paralleltest), govulncheck, `gen:check`
-- [ ] 8.2 Открыть PR из `change/idm-rbac-min`, добиться зелёного CI (вкл.
+- [x] 8.2 Открыть PR из `change/idm-rbac-min`, добиться зелёного CI (вкл.
   integration); архивирование change — только после merge в master
