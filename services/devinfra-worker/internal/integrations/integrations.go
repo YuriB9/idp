@@ -33,6 +33,11 @@ type GitLab interface {
 	// Unarchive — компенсация: разархивирует репозиторий и восстанавливает доступы
 	// (идемпотентно).
 	Unarchive(ctx context.Context, ref provisioning.ResourceRef) error
+	// TransferRepo переносит репозиторий в группу target-проекта при переносе
+	// сервиса (идемпотентно: если репозиторий уже в target — no-op). НЕОБРАТИМО в
+	// MVP (чистая компенсация transfer-back не моделируется — точка невозврата,
+	// ADR-0013). Сценарий «Перенос сервиса».
+	TransferRepo(ctx context.Context, ref provisioning.ResourceRef, target string) error
 }
 
 // Harbor — клиент Harbor: директория образов и Robot Account.
@@ -46,6 +51,9 @@ type Harbor interface {
 	SetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error
 	// SetWritable — компенсация: возвращает директорию в writable (идемпотентно).
 	SetWritable(ctx context.Context, ref provisioning.ResourceRef) error
+	// UpdateMetadata обновляет метаданные/права директории образов под target-проект
+	// при переносе сервиса (идемпотентно). Сценарий «Перенос сервиса».
+	UpdateMetadata(ctx context.Context, ref provisioning.ResourceRef, target string) error
 }
 
 // Vault — клиент Vault: политики и AppRole.
@@ -64,6 +72,10 @@ type Vault interface {
 	// эксплуатации — немедленное прекращение доступа (идемпотентно). НЕОБРАТИМО:
 	// компенсации нет (точка невозврата, ADR-0012).
 	RevokeSecretID(ctx context.Context, ref provisioning.ResourceRef) error
+	// MigratePaths мигрирует пути сервиса при переносе: копирует секреты source→target,
+	// записывает новые политики и очищает старые пути/политики (идемпотентно).
+	// Секреты не логируются. Сценарий «Перенос сервиса» (ADR-0013).
+	MigratePaths(ctx context.Context, ref provisioning.ResourceRef, target string) error
 }
 
 // Clients — собранный набор клиентов интеграций для регистрации в activities.

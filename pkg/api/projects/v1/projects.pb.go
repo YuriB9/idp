@@ -36,6 +36,11 @@ const (
 	ServiceStatus_SERVICE_STATUS_ACTIVE         ServiceStatus = 2
 	ServiceStatus_SERVICE_STATUS_DECOMMISSIONED ServiceStatus = 3
 	ServiceStatus_SERVICE_STATUS_FAILED         ServiceStatus = 4
+	// SERVICE_STATUS_TRANSFERRING — транзитный статус на время переноса сервиса в
+	// другой проект (ADR-0013). Защищает от конкурентных операций (guarded-CAS
+	// active→transferring) и даёт наблюдаемость незавершённого переноса.
+	// Аддитивное значение (новый номер 5; существующие значения не меняются).
+	ServiceStatus_SERVICE_STATUS_TRANSFERRING ServiceStatus = 5
 )
 
 // Enum value maps for ServiceStatus.
@@ -46,6 +51,7 @@ var (
 		2: "SERVICE_STATUS_ACTIVE",
 		3: "SERVICE_STATUS_DECOMMISSIONED",
 		4: "SERVICE_STATUS_FAILED",
+		5: "SERVICE_STATUS_TRANSFERRING",
 	}
 	ServiceStatus_value = map[string]int32{
 		"SERVICE_STATUS_UNSPECIFIED":    0,
@@ -53,6 +59,7 @@ var (
 		"SERVICE_STATUS_ACTIVE":         2,
 		"SERVICE_STATUS_DECOMMISSIONED": 3,
 		"SERVICE_STATUS_FAILED":         4,
+		"SERVICE_STATUS_TRANSFERRING":   5,
 	}
 )
 
@@ -781,6 +788,116 @@ func (x *DecommissionServiceResponse) GetService() *Service {
 	return nil
 }
 
+type TransferServiceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project — исходный проект-владелец (source), из которого переносится сервис.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// name — имя переносимого сервиса (сохраняется при переносе).
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// target_project — целевой проект-владелец (target), в который переносится
+	// сервис. Должен отличаться от project; пара (target_project, name) должна быть
+	// свободна, иначе конфликт.
+	TargetProject string `protobuf:"bytes,3,opt,name=target_project,json=targetProject,proto3" json:"target_project,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferServiceRequest) Reset() {
+	*x = TransferServiceRequest{}
+	mi := &file_projects_v1_projects_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferServiceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferServiceRequest) ProtoMessage() {}
+
+func (x *TransferServiceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferServiceRequest.ProtoReflect.Descriptor instead.
+func (*TransferServiceRequest) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TransferServiceRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *TransferServiceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TransferServiceRequest) GetTargetProject() string {
+	if x != nil {
+		return x.TargetProject
+	}
+	return ""
+}
+
+type TransferServiceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// service — итоговое состояние записи (project=target_project, status=ACTIVE).
+	Service       *Service `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TransferServiceResponse) Reset() {
+	*x = TransferServiceResponse{}
+	mi := &file_projects_v1_projects_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TransferServiceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransferServiceResponse) ProtoMessage() {}
+
+func (x *TransferServiceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransferServiceResponse.ProtoReflect.Descriptor instead.
+func (*TransferServiceResponse) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TransferServiceResponse) GetService() *Service {
+	if x != nil {
+		return x.Service
+	}
+	return nil
+}
+
 var File_projects_v1_projects_proto protoreflect.FileDescriptor
 
 const file_projects_v1_projects_proto_rawDesc = "" +
@@ -830,20 +947,28 @@ const file_projects_v1_projects_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
 	"\fload_drained\x18\x03 \x01(\bR\vloadDrained\"M\n" +
 	"\x1bDecommissionServiceResponse\x12.\n" +
-	"\aservice\x18\x01 \x01(\v2\x14.projects.v1.ServiceR\aservice*\xa5\x01\n" +
+	"\aservice\x18\x01 \x01(\v2\x14.projects.v1.ServiceR\aservice\"m\n" +
+	"\x16TransferServiceRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
+	"\x0etarget_project\x18\x03 \x01(\tR\rtargetProject\"I\n" +
+	"\x17TransferServiceResponse\x12.\n" +
+	"\aservice\x18\x01 \x01(\v2\x14.projects.v1.ServiceR\aservice*\xc6\x01\n" +
 	"\rServiceStatus\x12\x1e\n" +
 	"\x1aSERVICE_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17SERVICE_STATUS_CREATING\x10\x01\x12\x19\n" +
 	"\x15SERVICE_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSERVICE_STATUS_DECOMMISSIONED\x10\x03\x12\x19\n" +
-	"\x15SERVICE_STATUS_FAILED\x10\x042\xd8\x03\n" +
+	"\x15SERVICE_STATUS_FAILED\x10\x04\x12\x1f\n" +
+	"\x1bSERVICE_STATUS_TRANSFERRING\x10\x052\xb6\x04\n" +
 	"\x0fProjectsService\x12M\n" +
 	"\n" +
 	"GetService\x12\x1e.projects.v1.GetServiceRequest\x1a\x1f.projects.v1.GetServiceResponse\x12S\n" +
 	"\fListServices\x12 .projects.v1.ListServicesRequest\x1a!.projects.v1.ListServicesResponse\x12V\n" +
 	"\rCreateService\x12!.projects.v1.CreateServiceRequest\x1a\".projects.v1.CreateServiceResponse\x12_\n" +
 	"\x10SetServiceOwners\x12$.projects.v1.SetServiceOwnersRequest\x1a%.projects.v1.SetServiceOwnersResponse\x12h\n" +
-	"\x13DecommissionService\x12'.projects.v1.DecommissionServiceRequest\x1a(.projects.v1.DecommissionServiceResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
+	"\x13DecommissionService\x12'.projects.v1.DecommissionServiceRequest\x1a(.projects.v1.DecommissionServiceResponse\x12\\\n" +
+	"\x0fTransferService\x12#.projects.v1.TransferServiceRequest\x1a$.projects.v1.TransferServiceResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
 
 var (
 	file_projects_v1_projects_proto_rawDescOnce sync.Once
@@ -858,7 +983,7 @@ func file_projects_v1_projects_proto_rawDescGZIP() []byte {
 }
 
 var file_projects_v1_projects_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_projects_v1_projects_proto_goTypes = []any{
 	(ServiceStatus)(0),                  // 0: projects.v1.ServiceStatus
 	(*Service)(nil),                     // 1: projects.v1.Service
@@ -872,6 +997,8 @@ var file_projects_v1_projects_proto_goTypes = []any{
 	(*SetServiceOwnersResponse)(nil),    // 9: projects.v1.SetServiceOwnersResponse
 	(*DecommissionServiceRequest)(nil),  // 10: projects.v1.DecommissionServiceRequest
 	(*DecommissionServiceResponse)(nil), // 11: projects.v1.DecommissionServiceResponse
+	(*TransferServiceRequest)(nil),      // 12: projects.v1.TransferServiceRequest
+	(*TransferServiceResponse)(nil),     // 13: projects.v1.TransferServiceResponse
 }
 var file_projects_v1_projects_proto_depIdxs = []int32{
 	0,  // 0: projects.v1.Service.status:type_name -> projects.v1.ServiceStatus
@@ -879,21 +1006,24 @@ var file_projects_v1_projects_proto_depIdxs = []int32{
 	1,  // 2: projects.v1.ListServicesResponse.services:type_name -> projects.v1.Service
 	0,  // 3: projects.v1.CreateServiceResponse.status:type_name -> projects.v1.ServiceStatus
 	1,  // 4: projects.v1.DecommissionServiceResponse.service:type_name -> projects.v1.Service
-	2,  // 5: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
-	4,  // 6: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
-	6,  // 7: projects.v1.ProjectsService.CreateService:input_type -> projects.v1.CreateServiceRequest
-	8,  // 8: projects.v1.ProjectsService.SetServiceOwners:input_type -> projects.v1.SetServiceOwnersRequest
-	10, // 9: projects.v1.ProjectsService.DecommissionService:input_type -> projects.v1.DecommissionServiceRequest
-	3,  // 10: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
-	5,  // 11: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
-	7,  // 12: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
-	9,  // 13: projects.v1.ProjectsService.SetServiceOwners:output_type -> projects.v1.SetServiceOwnersResponse
-	11, // 14: projects.v1.ProjectsService.DecommissionService:output_type -> projects.v1.DecommissionServiceResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	1,  // 5: projects.v1.TransferServiceResponse.service:type_name -> projects.v1.Service
+	2,  // 6: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
+	4,  // 7: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
+	6,  // 8: projects.v1.ProjectsService.CreateService:input_type -> projects.v1.CreateServiceRequest
+	8,  // 9: projects.v1.ProjectsService.SetServiceOwners:input_type -> projects.v1.SetServiceOwnersRequest
+	10, // 10: projects.v1.ProjectsService.DecommissionService:input_type -> projects.v1.DecommissionServiceRequest
+	12, // 11: projects.v1.ProjectsService.TransferService:input_type -> projects.v1.TransferServiceRequest
+	3,  // 12: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
+	5,  // 13: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
+	7,  // 14: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
+	9,  // 15: projects.v1.ProjectsService.SetServiceOwners:output_type -> projects.v1.SetServiceOwnersResponse
+	11, // 16: projects.v1.ProjectsService.DecommissionService:output_type -> projects.v1.DecommissionServiceResponse
+	13, // 17: projects.v1.ProjectsService.TransferService:output_type -> projects.v1.TransferServiceResponse
+	12, // [12:18] is the sub-list for method output_type
+	6,  // [6:12] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_projects_v1_projects_proto_init() }
@@ -907,7 +1037,7 @@ func file_projects_v1_projects_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_projects_v1_projects_proto_rawDesc), len(file_projects_v1_projects_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

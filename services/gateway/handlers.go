@@ -79,6 +79,11 @@ type decommissionBody struct {
 	LoadDrained bool `json:"load_drained"`
 }
 
+// transferBody — тело запроса переноса сервиса (схема TransferServiceRequest).
+type transferBody struct {
+	TargetProject string `json:"target_project"`
+}
+
 // setOwnersBody — тело запроса смены владельцев (схема SetServiceOwnersRequest).
 type setOwnersBody struct {
 	Owners        []string `json:"owners"`
@@ -117,6 +122,7 @@ func (a *servicesAPI) register(r chi.Router) {
 	r.Get("/projects/{project}/services/{name}", a.get)
 	r.Put("/projects/{project}/services/{name}/owners", a.setOwners)
 	r.Post("/projects/{project}/services/{name}/decommission", a.decommission)
+	r.Post("/projects/{project}/services/{name}/transfer", a.transfer)
 }
 
 // create — POST /projects/{project}/services: запускает создание сервиса.
@@ -204,6 +210,54 @@ func (a *servicesAPI) decommission(w http.ResponseWriter, r *http.Request) {
 		Project:     project,
 		Name:        name,
 		LoadDrained: body.LoadDrained,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+
+	svc := resp.GetService()
+	a.writeJSON(w, http.StatusOK, serviceSummary{
+		Project:          svc.GetProject(),
+		Name:             svc.GetName(),
+		Status:           statusString(svc.GetStatus()),
+		Owners:           ownersOrEmpty(svc.GetOwners()),
+		OwnersVersion:    svc.GetOwnersVersion(),
+		DecommissionedAt: svc.GetDecommissionedAt(),
+	})
+}
+
+// transfer — POST /projects/{project}/services/{name}/transfer: перенос сервиса в
+// другой проект. RBAC двусторонний (fail-closed): transfer на исходном проекте И
+// transfer_in на целевом — без права на target нельзя «вынести» сервис в чужой
+// проект (ADR-0013). Тело несёт target_project.
+func (a *servicesAPI) transfer(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "name")
+
+	var body transferBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "некорректное тело запроса")
+		return
+	}
+	if body.TargetProject == "" {
+		a.writeError(w, r, http.StatusBadRequest, "target_project обязателен")
+		return
+	}
+
+	// RBAC: право transfer на исходном проекте И transfer_in на целевом
+	// (defense-in-depth, fail-closed). Отказ по любому → 403, без проксирования.
+	if !a.authorize(w, r, project, "transfer") {
+		return
+	}
+	if !a.authorize(w, r, body.TargetProject, "transfer_in") {
+		return
+	}
+
+	resp, err := a.client.TransferService(r.Context(), &projectsv1.TransferServiceRequest{
+		Project:       project,
+		Name:          name,
+		TargetProject: body.TargetProject,
 	})
 	if err != nil {
 		a.writeGRPCError(w, r, err)
@@ -348,6 +402,8 @@ func statusString(s projectsv1.ServiceStatus) string {
 		return "decommissioned"
 	case projectsv1.ServiceStatus_SERVICE_STATUS_FAILED:
 		return "failed"
+	case projectsv1.ServiceStatus_SERVICE_STATUS_TRANSFERRING:
+		return "transferring"
 	default:
 		// UNSPECIFIED/неизвестное — пустая строка; клиентский zod .parse
 		// упадёт явно, сигнализируя о дрейфе контракта.

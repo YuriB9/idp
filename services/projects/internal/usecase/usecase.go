@@ -6,6 +6,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -37,6 +38,10 @@ type WorkflowStarter interface {
 	// StartDecommission запускает workflow «Вывод из эксплуатации». loadDrained —
 	// явное предусловие снятой нагрузки из K8s (ADR-0012).
 	StartDecommission(ctx context.Context, serviceID, project, name string, loadDrained bool) error
+	// StartTransfer запускает workflow «Перенос сервиса». source/target — исходный
+	// и целевой проекты; owners — текущий набор владельцев для переноса ролей IDM
+	// (ADR-0013).
+	StartTransfer(ctx context.Context, serviceID, source, target, name string, owners []string) error
 }
 
 // Catalog — usecase каталога сервисов.
@@ -154,6 +159,40 @@ func (c *Catalog) DecommissionService(ctx context.Context, project, name string,
 	}
 	if err := c.starter.StartDecommission(ctx, svc.ID.String(), project, name, loadDrained); err != nil {
 		return repository.Service{}, fmt.Errorf("usecase: запуск workflow вывода из эксплуатации: %w", err)
+	}
+	return svc, nil
+}
+
+// TransferService переносит сервис в другой проект (смена project-владельца):
+// читает исходную запись, проверяет допустимость исходного статуса, затем
+// запускает Temporal-workflow «Перенос» (фактическая смена project, перенос
+// инфраструктуры и ролей — в workflow, асинхронно). Семантика идемпотентна: если
+// сервис уже перенесён (есть активная запись (target, name), а (source, name)
+// отсутствует) → no-op success с итоговой записью. Недопустимый исходный статус
+// (creating/failed/decommissioned/transferring) → errs.ErrPrecondition; отсутствие
+// записи → errs.ErrNotFound. Возвращает запись каталога на момент вызова.
+func (c *Catalog) TransferService(ctx context.Context, project, name, target string) (repository.Service, error) {
+	if c.starter == nil {
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow не сконфигурирован")
+	}
+	svc, err := c.store.GetByName(ctx, project, name)
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			// Возможно, перенос уже выполнен: ищем активную запись в target.
+			if tsvc, terr := c.store.GetByName(ctx, target, name); terr == nil && tsvc.Status == repository.StatusActive {
+				return tsvc, nil
+			}
+			return repository.Service{}, fmt.Errorf("usecase: чтение сервиса для переноса: %w", err)
+		}
+		return repository.Service{}, fmt.Errorf("usecase: чтение сервиса для переноса: %w", err)
+	}
+	if svc.Status != repository.StatusActive {
+		// Переносить можно только активный сервис (transferring → перенос уже идёт;
+		// creating/failed/decommissioned → недопустимый исходный статус).
+		return repository.Service{}, fmt.Errorf("usecase: недопустимый исходный статус %q для переноса: %w", svc.Status, errs.ErrPrecondition)
+	}
+	if err := c.starter.StartTransfer(ctx, svc.ID.String(), project, target, name, svc.Owners); err != nil {
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow переноса: %w", err)
 	}
 	return svc, nil
 }

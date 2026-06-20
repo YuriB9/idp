@@ -346,3 +346,102 @@ func TestIntegrationDecommission(t *testing.T) {
 		t.Fatalf("ожидали ErrNotFound, получили %v", err)
 	}
 }
+
+// TestIntegrationTransfer проверяет перенос (смену project) через две фазы
+// guarded-CAS: begin (active→transferring), commit (transferring→active +
+// project=target), сохранение id/владельцев, проверку свободы (target, name),
+// компенсацию abort и предусловия.
+func TestIntegrationTransfer(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	repo := New(pool)
+	ctx := context.Background()
+	const source = "it-xfer-src"
+	const target = "it-xfer-tgt"
+	cleanupProject(t, pool, source)
+	cleanupProject(t, pool, target)
+	defer cleanupProject(t, pool, source)
+	defer cleanupProject(t, pool, target)
+
+	// Активный сервис с владельцем в source.
+	id := uuid.New()
+	if err := repo.Create(ctx, Service{ID: id, Project: source, Name: "svc", Status: StatusCreating}); err != nil {
+		t.Fatalf("вставка: %v", err)
+	}
+	if err := repo.TransitionStatus(ctx, id, StatusCreating, StatusActive); err != nil {
+		t.Fatalf("перевод в active: %v", err)
+	}
+	if _, _, err := repo.SetOwners(ctx, id, []string{"alice"}, 0); err != nil {
+		t.Fatalf("посев владельца: %v", err)
+	}
+
+	// Фаза начала: active→transferring (project не меняется).
+	if _, err := repo.BeginTransfer(ctx, id, target); err != nil {
+		t.Fatalf("BeginTransfer: %v", err)
+	}
+	cur, err := repo.GetByName(ctx, source, "svc")
+	if err != nil || cur.Status != StatusTransferring {
+		t.Fatalf("ожидали transferring в source, получили %q (err=%v)", cur.Status, err)
+	}
+
+	// Фаза фиксации: transferring→active + project=target; id и владельцы сохранены.
+	got, err := repo.CommitTransfer(ctx, id, target)
+	if err != nil {
+		t.Fatalf("CommitTransfer: %v", err)
+	}
+	if got.Project != target || got.Status != StatusActive || got.ID != id {
+		t.Fatalf("ожидали target/active/тот же id, получили %+v", got)
+	}
+	if len(got.Owners) != 1 || got.Owners[0] != "alice" {
+		t.Fatalf("владельцы должны переехать с записью, получили %v", got.Owners)
+	}
+	// Идемпотентный повтор фиксации.
+	if _, err := repo.CommitTransfer(ctx, id, target); err != nil {
+		t.Fatalf("идемпотентный повтор CommitTransfer: %v", err)
+	}
+
+	// Занятое имя в target: новая запись (target, busy) и попытка перенести
+	// (source, busy) → ErrConflict до side-effect.
+	busyID := uuid.New()
+	if err := repo.Create(ctx, Service{ID: busyID, Project: target, Name: "busy", Status: StatusActive}); err != nil {
+		t.Fatalf("вставка target/busy: %v", err)
+	}
+	srcBusyID := uuid.New()
+	if err := repo.Create(ctx, Service{ID: srcBusyID, Project: source, Name: "busy", Status: StatusActive}); err != nil {
+		t.Fatalf("вставка source/busy: %v", err)
+	}
+	if _, err := repo.BeginTransfer(ctx, srcBusyID, target); !errors.Is(err, errs.ErrConflict) {
+		t.Fatalf("ожидали ErrConflict при занятом имени, получили %v", err)
+	}
+
+	// Предусловие: перенос из creating недопустим.
+	cid := uuid.New()
+	if err := repo.Create(ctx, Service{ID: cid, Project: source, Name: "creating-svc", Status: StatusCreating}); err != nil {
+		t.Fatalf("вставка creating: %v", err)
+	}
+	if _, err := repo.BeginTransfer(ctx, cid, target); !errors.Is(err, errs.ErrPrecondition) {
+		t.Fatalf("ожидали ErrPrecondition из creating, получили %v", err)
+	}
+
+	// Компенсация abort: transferring→active.
+	aid := uuid.New()
+	if err := repo.Create(ctx, Service{ID: aid, Project: source, Name: "abort-svc", Status: StatusActive}); err != nil {
+		t.Fatalf("вставка abort-svc: %v", err)
+	}
+	if _, err := repo.BeginTransfer(ctx, aid, target); err != nil {
+		t.Fatalf("BeginTransfer(abort-svc): %v", err)
+	}
+	if err := repo.AbortTransfer(ctx, aid); err != nil {
+		t.Fatalf("AbortTransfer: %v", err)
+	}
+	back, err := repo.GetByName(ctx, source, "abort-svc")
+	if err != nil || back.Status != StatusActive {
+		t.Fatalf("ожидали возврат в active после abort, получили %q (err=%v)", back.Status, err)
+	}
+
+	// NotFound для отсутствующего сервиса.
+	if _, err := repo.BeginTransfer(ctx, uuid.New(), target); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", err)
+	}
+}

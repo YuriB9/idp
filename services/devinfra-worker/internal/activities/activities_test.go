@@ -15,6 +15,7 @@ import (
 	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
+	"github.com/YuriB9/idp/services/projects/transfer"
 )
 
 // fakeStatus — управляемый стаб StatusStore.
@@ -238,5 +239,109 @@ func TestActivities_DecommissionRevokesAccess(t *testing.T) {
 	}
 	if fd.got != "svc" {
 		t.Fatalf("ожидали Decommission(svc), получили %q", fd.got)
+	}
+}
+
+// fakeTransfer — управляемый стаб TransferStore.
+type fakeTransfer struct {
+	beginErr  error
+	commitErr error
+	begun     string
+	committed string
+	aborted   string
+	commitTgt string
+	beginTgt  string
+}
+
+func (f *fakeTransfer) BeginTransfer(_ context.Context, id, target string) error {
+	f.begun, f.beginTgt = id, target
+	return f.beginErr
+}
+func (f *fakeTransfer) CommitTransfer(_ context.Context, id, target string) error {
+	f.committed, f.commitTgt = id, target
+	return f.commitErr
+}
+func (f *fakeTransfer) AbortTransfer(_ context.Context, id string) error {
+	f.aborted = id
+	return nil
+}
+
+// TestActivities_TransferDelegates: activities переноса делегируют клиентам
+// интеграций (in-memory) и слою каталога, фиксируя целевой проект.
+func TestActivities_TransferDelegates(t *testing.T) {
+	t.Parallel()
+	mem := integrations.NewMemory()
+	ft := &fakeTransfer{}
+	acts := activities.New(mem.Clients(), &fakeStatus{}, activities.WithTransfer(ft))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.CatalogBeginTransfer)
+	env.RegisterActivity(acts.GitLabTransferRepo)
+	env.RegisterActivity(acts.VaultMigratePaths)
+	env.RegisterActivity(acts.HarborUpdateMetadata)
+	env.RegisterActivity(acts.CatalogCommitTransfer)
+	ref := transfer.TransferRef{ServiceID: "svc", Source: "demo", Target: "demo2", Name: "n"}
+	catIn := transfer.CatalogTransferInput{ServiceID: "svc", Target: "demo2"}
+
+	if _, err := env.ExecuteActivity(acts.CatalogBeginTransfer, catIn); err != nil {
+		t.Fatalf("CatalogBeginTransfer: %v", err)
+	}
+	for _, fn := range []any{acts.GitLabTransferRepo, acts.VaultMigratePaths, acts.HarborUpdateMetadata} {
+		if _, err := env.ExecuteActivity(fn, ref); err != nil {
+			t.Fatalf("activity переноса: неожиданная ошибка: %v", err)
+		}
+	}
+	if _, err := env.ExecuteActivity(acts.CatalogCommitTransfer, catIn); err != nil {
+		t.Fatalf("CatalogCommitTransfer: %v", err)
+	}
+
+	memRef := provisioning.ResourceRef{ServiceID: "svc", Project: "demo", Name: "n"}
+	if mem.RepoGroup(memRef) != "demo2" || mem.VaultPath(memRef) != "demo2" || mem.HarborProject(memRef) != "demo2" {
+		t.Fatalf("ожидали перенос инфраструктуры в demo2: repo=%q vault=%q harbor=%q",
+			mem.RepoGroup(memRef), mem.VaultPath(memRef), mem.HarborProject(memRef))
+	}
+	if ft.beginTgt != "demo2" || ft.commitTgt != "demo2" {
+		t.Fatalf("ожидали begin/commit в target demo2, получили %+v", ft)
+	}
+}
+
+// TestActivities_TransferOwnerRoles: для каждого владельца выдаётся роль target и
+// отзывается роль source.
+func TestActivities_TransferOwnerRoles(t *testing.T) {
+	t.Parallel()
+	roles := &fakeRoles{}
+	acts := activities.New(integrations.NewMemory().Clients(), &fakeStatus{}, activities.WithIDMRoles(roles))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.TransferOwnerRoles)
+
+	in := transfer.TransferRolesInput{Source: "demo", Target: "demo2", Owners: []string{"alice"}}
+	if _, err := env.ExecuteActivity(acts.TransferOwnerRoles, in); err != nil {
+		t.Fatalf("TransferOwnerRoles: %v", err)
+	}
+	if len(roles.assigned) != 1 || roles.assigned[0] != "alice@owner:project:demo2" {
+		t.Fatalf("ожидали выдачу alice@owner:project:demo2, получили %v", roles.assigned)
+	}
+	if len(roles.revoked) != 1 || roles.revoked[0] != "alice@owner:project:demo" {
+		t.Fatalf("ожидали отзыв alice@owner:project:demo, получили %v", roles.revoked)
+	}
+}
+
+// TestActivities_CatalogBeginTransferConflictNonRetryable: занятое имя/конфликт →
+// non-retryable (workflow уйдёт в ветку компенсации/ошибки).
+func TestActivities_CatalogBeginTransferConflictNonRetryable(t *testing.T) {
+	t.Parallel()
+	ft := &fakeTransfer{beginErr: fmt.Errorf("занято: %w", errs.ErrConflict)}
+	acts := activities.New(integrations.NewMemory().Clients(), &fakeStatus{}, activities.WithTransfer(ft))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.CatalogBeginTransfer)
+
+	_, err := env.ExecuteActivity(acts.CatalogBeginTransfer, transfer.CatalogTransferInput{ServiceID: "svc", Target: "demo2"})
+	if err == nil {
+		t.Fatal("ожидали ошибку при конфликте")
 	}
 }

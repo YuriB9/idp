@@ -96,6 +96,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project}/services/{name}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Перенос сервиса в другой проект
+         * @description Переносит сервис в другой проект (смена project-владельца): id записи каталога сохраняется, меняется проект (source→target), владельцы переезжают вместе с записью. Перенос выполняется асинхронно (Saga) с ТОЧКОЙ НЕВОЗВРАТА на переносе репозитория GitLab: каталог active→transferring → transfer GitLab → миграция путей Vault → метаданные Harbor → каталог transferring→active (project=target) → перенос ролей владельцев в IDM. Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом (ADR-0013). Идемпотентно: повтор на уже перенесённом сервисе → 200. Допустим только исходный статус active; недопустимый статус → 422; занятое имя в target или конкурентная смена → 409; отсутствие сервиса → 404; отказ RBAC (transfer/transfer_in) → 403.
+         */
+        post: operations["transferService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -108,7 +128,7 @@ export interface components {
          * @description Статус сервиса в каталоге (ADR-0004).
          * @enum {string}
          */
-        ServiceStatus: "creating" | "active" | "decommissioned" | "failed";
+        ServiceStatus: "creating" | "active" | "decommissioned" | "failed" | "transferring";
         ServiceSummary: {
             project: string;
             name: string;
@@ -158,6 +178,10 @@ export interface components {
         DecommissionServiceRequest: {
             /** @description Явное предусловие: нагрузка сервиса снята из K8s. В MVP K8s-worker отсутствует, поэтому снятие подтверждается клиентом (ADR-0012). false → 422 до любых побочных эффектов. */
             load_drained: boolean;
+        };
+        TransferServiceRequest: {
+            /** @description Целевой проект-владелец (target), в который переносится сервис. Должен отличаться от исходного проекта; пара (target_project, name) должна быть свободна, иначе 409. */
+            target_project: string;
         };
         Error: {
             /** @description Стабильное сообщение об ошибке для клиента. Внутренние детали (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера. */
@@ -392,6 +416,40 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    transferService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+                /** @description Имя сервиса внутри проекта. */
+                name: components["parameters"]["ServiceNamePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransferServiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Перенос запущен (или сервис уже перенесён) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["PreconditionFailed"];
         };
     };
 }

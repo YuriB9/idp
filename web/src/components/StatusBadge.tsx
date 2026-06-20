@@ -1,9 +1,9 @@
 // Бейдж статуса сервиса каталога (ADR-0004): цвет, иконка и подпись по статусу.
-import { CheckCircle2, Loader2, XCircle, Archive, HelpCircle } from "lucide-react";
+import { CheckCircle2, Loader2, XCircle, Archive, HelpCircle, ArrowLeftRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 
-type ServiceStatus = "creating" | "active" | "decommissioned" | "failed" | string;
+type ServiceStatus = "creating" | "active" | "decommissioned" | "failed" | "transferring" | string;
 
 // мета описывает оформление бейджа для каждого статуса.
 const meta: Record<
@@ -14,6 +14,7 @@ const meta: Record<
   active: { label: "Активен", variant: "success", Icon: CheckCircle2 },
   failed: { label: "Ошибка", variant: "destructive", Icon: XCircle },
   decommissioned: { label: "Выведен", variant: "secondary", Icon: Archive },
+  transferring: { label: "Переносится", variant: "warning", spin: true, Icon: ArrowLeftRight },
 };
 
 export function StatusBadge({ status }: { status: ServiceStatus }) {

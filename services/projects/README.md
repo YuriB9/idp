@@ -67,6 +67,54 @@ PUT /api/projects/{project}/services/{name}/owners
 - Тот же запрос в проекте без права `change_owners` → **403**.
 - Повтор с устаревшей `owners_version` → **409**.
 
+## Перенос сервиса в другой проект (transfer)
+
+Перенос меняет проект-владельца сервиса: **id записи каталога сохраняется**,
+меняется колонка `project` (`source→target`), владельцы переезжают вместе с
+записью. Это самый рискованный сценарий (ADR-0013): `transfer` репозитория GitLab
+и миграция путей Vault частично **необратимы**.
+
+`POST /api/projects/{project}/services/{name}/transfer` с телом
+`{"target_project":"<target>"}`. Допустим только исходный статус `active`; на время
+переноса сервис переходит в транзитный статус `transferring` (защита от
+конкурентных операций + наблюдаемость).
+
+### Что происходит в workflow «Перенос» (Saga)
+
+1. каталог `active→transferring` (guarded-CAS, **компенсируемо**);
+2. **`GitLabTransferRepo`** — перенос репозитория в группу target. **ТОЧКА
+   НЕВОЗВРАТА**: чистая компенсация (transfer-back) в MVP не моделируется;
+3. `VaultMigratePaths` — копия секретов `source→target` + новые политики + очистка
+   старых;
+4. `HarborUpdateMetadata` — обновление метаданных/прав директории под target;
+5. каталог `transferring→active` + `project=target` (guarded-CAS);
+6. `TransferOwnerRoles` — перенос ролей владельцев в IDM (`revoke
+   owner:project:<source>` + `assign owner:project:<target>`) + инвалидация кэша.
+
+Сбой **до** точки невозврата → идемпотентная компенсация каталога
+(`transferring→active`), внешние системы не затронуты. Сбой **после** → НЕ
+молчаливый откат: форвард-only ретраи идемпотентных шагов, при исчерпании — **алерт
+оператору** (структурный лог по ключу `err`); сервис может остаться в
+`transferring` до ручного довыполнения. Каталог — целевой источник правды.
+
+### Авторизация (двусторонняя, fail-closed)
+
+Перенос затрагивает ДВА проекта, поэтому требует ДВУХ прав: `transfer` на
+`project:<source>` (вынести) И `transfer_in` на `project:<target>` (принять). Оба
+проверяются `CheckAccess` на периметре и в `projects` (defense-in-depth). Без права
+`transfer_in` на target нельзя «вынести» сервис в чужой проект.
+
+### Как проверить отказ/предусловие/разрешение (локалка)
+
+Стенд засеян так, что `demo-user` имеет `(transfer, project:demo)` и
+`(transfer_in, project:demo2)`; проект `demo2` с ролью `owner:project:demo2`.
+
+- `POST /api/projects/demo/services/<svc>/transfer {"target_project":"demo2"}`
+  → **200**, запускается перенос (сервис → `transferring`, затем `active` в `demo2`).
+- Перенос в проект без права `transfer_in` (например, `demo3`) → **403**.
+- Имя `<svc>` уже занято в `demo2` → **409**.
+- Сервис не в статусе `active` (например, `creating`) → **422**.
+
 ## Миграции
 
 ```bash

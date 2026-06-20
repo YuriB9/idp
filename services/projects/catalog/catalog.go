@@ -57,6 +57,40 @@ func (s *StatusStore) Decommission(ctx context.Context, serviceID string) error 
 	return err
 }
 
+// BeginTransfer начинает перенос: guarded-CAS ACTIVE→TRANSFERRING с проверкой
+// свободы (target, name) (ADR-0013). Идемпотентен. Занятое имя/конкурентная смена
+// → errs.ErrConflict; недопустимый исходный статус → errs.ErrPrecondition.
+func (s *StatusStore) BeginTransfer(ctx context.Context, serviceID, target string) error {
+	id, err := uuid.Parse(serviceID)
+	if err != nil {
+		return fmt.Errorf("catalog: некорректный service_id %q: %w", serviceID, err)
+	}
+	_, err = s.repo.BeginTransfer(ctx, id, target)
+	return err
+}
+
+// CommitTransfer фиксирует перенос: guarded-CAS TRANSFERRING→ACTIVE со сменой
+// project на target (ADR-0013). Идемпотентен. Занятое имя/конкурентная смена →
+// errs.ErrConflict.
+func (s *StatusStore) CommitTransfer(ctx context.Context, serviceID, target string) error {
+	id, err := uuid.Parse(serviceID)
+	if err != nil {
+		return fmt.Errorf("catalog: некорректный service_id %q: %w", serviceID, err)
+	}
+	_, err = s.repo.CommitTransfer(ctx, id, target)
+	return err
+}
+
+// AbortTransfer — компенсация начала переноса: guarded-CAS TRANSFERRING→ACTIVE
+// (ADR-0013). Идемпотентна.
+func (s *StatusStore) AbortTransfer(ctx context.Context, serviceID string) error {
+	id, err := uuid.Parse(serviceID)
+	if err != nil {
+		return fmt.Errorf("catalog: некорректный service_id %q: %w", serviceID, err)
+	}
+	return s.repo.AbortTransfer(ctx, id)
+}
+
 // SetOwners выполняет guarded-CAS замену набора владельцев (docs/adr/0011).
 // Конфликт версии → errs.ErrConflict, отсутствие записи → errs.ErrNotFound.
 func (s *StatusStore) SetOwners(ctx context.Context, serviceID string, desired []string, expectedVersion int64) error {

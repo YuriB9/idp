@@ -36,6 +36,7 @@ import (
 	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
+	"github.com/YuriB9/idp/services/projects/transfer"
 )
 
 // idmRoleAdmin — адаптер gRPC-клиента IDM RoleAdminService к интерфейсу
@@ -116,6 +117,7 @@ func run() error {
 		activities.WithOwners(store),
 		activities.WithIDMRoles(idmRoleAdmin{c: idmv1.NewRoleAdminServiceClient(idmConn)}),
 		activities.WithDecommission(store),
+		activities.WithTransfer(store),
 	)
 
 	temporalClient, err := client.NewLazyClient(client.Options{
@@ -136,6 +138,8 @@ func run() error {
 		workflow.RegisterOptions{Name: changeowners.WorkflowName})
 	w.RegisterWorkflowWithOptions(decommission.DecommissionWorkflow,
 		workflow.RegisterOptions{Name: decommission.WorkflowName})
+	w.RegisterWorkflowWithOptions(transfer.TransferServiceWorkflow,
+		workflow.RegisterOptions{Name: transfer.WorkflowName})
 	acts.Register(w)
 
 	// alive отражает, что worker запущен и поллит task-queue (k8s не должен слать
