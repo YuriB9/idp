@@ -74,6 +74,56 @@ func (r *Repo) Decommission(ctx context.Context, id uuid.UUID) (Service, error) 
 	return decommission(ctx, r.pool, id)
 }
 
+// BeginTransfer начинает перенос: guarded-CAS ACTIVE→TRANSFERRING с проверкой
+// свободы (target, name) в одной транзакции (ADR-0013). Идемпотентен: если запись
+// уже перенесена (project=target, active) или уже в transferring — возвращается
+// текущее состояние без изменений. Занятое (target, name) → errs.ErrConflict;
+// недопустимый исходный статус (creating/failed/decommissioned) →
+// errs.ErrPrecondition; конкурентная смена → errs.ErrConflict; отсутствие записи
+// → errs.ErrNotFound.
+func (r *Repo) BeginTransfer(ctx context.Context, id uuid.UUID, target string) (Service, error) {
+	var out Service
+	err := r.InTx(ctx, func(tx *TxRepo) error {
+		s, terr := beginTransfer(ctx, tx.q, id, target)
+		if terr != nil {
+			return terr
+		}
+		out = s
+		return nil
+	})
+	if err != nil {
+		return Service{}, err
+	}
+	return out, nil
+}
+
+// CommitTransfer фиксирует перенос: guarded-CAS TRANSFERRING→ACTIVE со сменой
+// project на target (ADR-0013). Идемпотентен: повтор на уже перенесённой записи
+// (project=target, active) → успех. Занятое (target, name) или конкурентная смена
+// статуса → errs.ErrConflict; отсутствие записи → errs.ErrNotFound.
+func (r *Repo) CommitTransfer(ctx context.Context, id uuid.UUID, target string) (Service, error) {
+	var out Service
+	err := r.InTx(ctx, func(tx *TxRepo) error {
+		s, terr := commitTransfer(ctx, tx.q, id, target)
+		if terr != nil {
+			return terr
+		}
+		out = s
+		return nil
+	})
+	if err != nil {
+		return Service{}, err
+	}
+	return out, nil
+}
+
+// AbortTransfer — компенсация начала переноса: guarded-CAS TRANSFERRING→ACTIVE
+// (project не менялся). Идемпотентен: если запись уже active → успех. Прочие
+// статусы → errs.ErrConflict; отсутствие записи → errs.ErrNotFound.
+func (r *Repo) AbortTransfer(ctx context.Context, id uuid.UUID) error {
+	return abortTransfer(ctx, r.pool, id)
+}
+
 // SetOwners декларативно заменяет набор владельцев сервиса в одной транзакции:
 // вычисляет diff против текущего состояния, применяет DELETE/INSERT и
 // guarded-CAS инкрементит owners_version (docs/adr/0011). expected — ожидаемая
@@ -265,6 +315,104 @@ func decommission(ctx context.Context, q Querier, id uuid.UUID) (Service, error)
 		}
 	}
 	return getByID(ctx, q, id)
+}
+
+// beginTransfer — фаза начала переноса поверх Querier (внутри транзакции):
+// проверка свободы (target, name) + guarded-CAS ACTIVE→TRANSFERRING. Идемпотентен
+// (см. Repo.BeginTransfer). Это НЕ check-then-act для самого перехода: статус
+// перечитывается лишь для различения идемпотентного повтора, предусловия и
+// конфликта.
+func beginTransfer(ctx context.Context, q Querier, id uuid.UUID, target string) (Service, error) {
+	cur, err := getByID(ctx, q, id)
+	if err != nil {
+		return Service{}, err
+	}
+	// Идемпотентность: перенос уже завершён или уже идёт — без повторного CAS.
+	if cur.Project == target && cur.Status == StatusActive {
+		return cur, nil
+	}
+	if cur.Status == StatusTransferring {
+		return cur, nil
+	}
+	// Проверка свободы (target, name) до побочных эффектов.
+	var exists int
+	switch err := q.QueryRow(ctx,
+		`SELECT 1 FROM services WHERE project = $1 AND name = $2`, target, cur.Name).Scan(&exists); {
+	case err == nil:
+		return Service{}, fmt.Errorf("repository: имя занято в target (%s, %s): %w", target, cur.Name, errs.ErrConflict)
+	case errors.Is(err, pgx.ErrNoRows):
+		// свободно — продолжаем
+	default:
+		return Service{}, fmt.Errorf("repository: проверка свободы имени в target: %w", err)
+	}
+	// guarded-CAS ACTIVE→TRANSFERRING.
+	tag, err := q.Exec(ctx,
+		`UPDATE services SET status = $2, updated_at = now() WHERE id = $1 AND status = $3`,
+		id, string(StatusTransferring), string(StatusActive))
+	if err != nil {
+		return Service{}, fmt.Errorf("repository: begin transfer: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		switch cur.Status {
+		case StatusCreating, StatusFailed, StatusDecommissioned:
+			return Service{}, fmt.Errorf("repository: недопустимый исходный статус %q: %w", cur.Status, errs.ErrPrecondition)
+		default:
+			return Service{}, fmt.Errorf("repository: конкурентная смена статуса (id=%s): %w", id, errs.ErrConflict)
+		}
+	}
+	return getByID(ctx, q, id)
+}
+
+// commitTransfer — фаза фиксации переноса поверх Querier: guarded-CAS
+// TRANSFERRING→ACTIVE со сменой project на target. Идемпотентен (см.
+// Repo.CommitTransfer). Занятое (target, name) ловится unique-violation →
+// errs.ErrConflict.
+func commitTransfer(ctx context.Context, q Querier, id uuid.UUID, target string) (Service, error) {
+	cur, err := getByID(ctx, q, id)
+	if err != nil {
+		return Service{}, err
+	}
+	// Идемпотентность: запись уже перенесена.
+	if cur.Project == target && cur.Status == StatusActive {
+		return cur, nil
+	}
+	tag, err := q.Exec(ctx,
+		`UPDATE services SET project = $2, status = $3, updated_at = now() WHERE id = $1 AND status = $4`,
+		id, target, string(StatusActive), string(StatusTransferring))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+			return Service{}, fmt.Errorf("repository: имя занято в target (%s, %s): %w", target, cur.Name, errs.ErrConflict)
+		}
+		return Service{}, fmt.Errorf("repository: commit transfer: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Статус не TRANSFERRING — конкурентная смена.
+		return Service{}, fmt.Errorf("repository: конкурентная смена статуса (id=%s): %w", id, errs.ErrConflict)
+	}
+	return getByID(ctx, q, id)
+}
+
+// abortTransfer — компенсация начала переноса поверх Querier: guarded-CAS
+// TRANSFERRING→ACTIVE (project не менялся). Идемпотентен.
+func abortTransfer(ctx context.Context, q Querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE services SET status = $2, updated_at = now() WHERE id = $1 AND status = $3`,
+		id, string(StatusActive), string(StatusTransferring))
+	if err != nil {
+		return fmt.Errorf("repository: abort transfer: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		cur, gerr := getByIDStatus(ctx, q, id)
+		if gerr != nil {
+			return gerr
+		}
+		if cur.Status == StatusActive {
+			return nil // идемпотентная компенсация: уже active
+		}
+		return fmt.Errorf("repository: конкурентная смена статуса при компенсации (id=%s): %w", id, errs.ErrConflict)
+	}
+	return nil
 }
 
 // getByIDStatus читает только статус записи по id (для разбора guarded-CAS).

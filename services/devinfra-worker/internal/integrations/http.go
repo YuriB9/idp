@@ -186,6 +186,15 @@ func (c *gitLabHTTP) Unarchive(ctx context.Context, ref provisioning.ResourceRef
 	return c.doer.call(ctx, http.MethodPost, url, nil, nil, http.StatusConflict, http.StatusNotFound)
 }
 
+func (c *gitLabHTTP) TransferRepo(ctx context.Context, ref provisioning.ResourceRef, target string) error {
+	// Перенос репозитория в группу target (идемпотентно: 409 — репозиторий уже в
+	// целевой группе; 404 — допускаем как успешный исход на стенде). Необратимо.
+	proj := ref.Project + "%2F" + ref.Name
+	url := fmt.Sprintf("%s/api/v4/projects/%s/transfer", c.base, proj)
+	body := map[string]string{"namespace": target}
+	return c.doer.call(ctx, http.MethodPost, url, body, nil, http.StatusConflict, http.StatusNotFound)
+}
+
 // --- Harbor ---
 
 type harborHTTP struct {
@@ -240,6 +249,14 @@ func (c *harborHTTP) SetWritable(ctx context.Context, ref provisioning.ResourceR
 	projName := ref.Project + "-" + ref.Name
 	return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
 		map[string]any{"read_only": false}, nil, http.StatusNotFound)
+}
+
+func (c *harborHTTP) UpdateMetadata(ctx context.Context, ref provisioning.ResourceRef, target string) error {
+	// Обновление метаданных/прав директории под target-проект (идемпотентно: 404 —
+	// успех на стенде).
+	projName := ref.Project + "-" + ref.Name
+	body := map[string]any{"metadata": map[string]string{"owner_project": target}}
+	return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName, body, nil, http.StatusNotFound)
 }
 
 // --- Vault ---
@@ -326,4 +343,35 @@ func (c *vaultHTTP) RevokeSecretID(ctx context.Context, ref provisioning.Resourc
 	role := ref.Project + "-" + ref.Name
 	url := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id/destroy", c.base, role)
 	return c.doer.call(ctx, http.MethodPost, url, map[string]string{}, nil, http.StatusNotFound)
+}
+
+func (c *vaultHTTP) MigratePaths(ctx context.Context, ref provisioning.ResourceRef, target string) error {
+	// Миграция путей: копия секретов source→target + новые политики + очистка старых
+	// (идемпотентно: PUT перезаписывает, 404 при очистке — успех). Значения секретов
+	// не логируем.
+	srcRole := ref.Project + "-" + ref.Name
+	dstRole := target + "-" + ref.Name
+	// 1. Копия секретов в новый путь.
+	var read struct {
+		Data struct {
+			Data map[string]any `json:"data"`
+		} `json:"data"`
+	}
+	if err := c.doer.call(ctx, http.MethodGet, c.base+"/v1/secret/data/"+srcRole, nil, &read, http.StatusNotFound); err != nil {
+		return err
+	}
+	if err := c.doer.call(ctx, http.MethodPut, c.base+"/v1/secret/data/"+dstRole,
+		map[string]any{"data": read.Data.Data}, nil); err != nil {
+		return err
+	}
+	// 2. Новая политика для target-пути (идемпотентно).
+	if err := c.doer.call(ctx, http.MethodPut, c.base+"/v1/sys/policies/acl/"+dstRole,
+		map[string]string{"policy": "path \"secret/data/" + dstRole + "/*\" { capabilities=[\"read\"] }"}, nil); err != nil {
+		return err
+	}
+	// 3. Очистка старых путей/политик (404 — успех).
+	if err := c.doer.call(ctx, http.MethodDelete, c.base+"/v1/secret/data/"+srcRole, nil, nil, http.StatusNotFound); err != nil {
+		return err
+	}
+	return c.doer.call(ctx, http.MethodDelete, c.base+"/v1/sys/policies/acl/"+srcRole, nil, nil, http.StatusNotFound)
 }

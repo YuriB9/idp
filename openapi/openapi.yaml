@@ -165,6 +165,48 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /projects/{project}/services/{name}/transfer:
+    post:
+      operationId: transferService
+      summary: Перенос сервиса в другой проект
+      description: >
+        Переносит сервис в другой проект (смена project-владельца): id записи
+        каталога сохраняется, меняется проект (source→target), владельцы переезжают
+        вместе с записью. Перенос выполняется асинхронно (Saga) с ТОЧКОЙ НЕВОЗВРАТА
+        на переносе репозитория GitLab: каталог active→transferring → transfer
+        GitLab → миграция путей Vault → метаданные Harbor → каталог
+        transferring→active (project=target) → перенос ролей владельцев в IDM.
+        Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом
+        (ADR-0013). Идемпотентно: повтор на уже перенесённом сервисе → 200.
+        Допустим только исходный статус active; недопустимый статус → 422; занятое
+        имя в target или конкурентная смена → 409; отсутствие сервиса → 404; отказ
+        RBAC (transfer/transfer_in) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferServiceRequest"
+      responses:
+        "200":
+          description: Перенос запущен (или сервис уже перенесён)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
 components:
   parameters:
     ProjectPath:
@@ -227,7 +269,7 @@ components:
     ServiceStatus:
       type: string
       description: Статус сервиса в каталоге (ADR-0004).
-      enum: [creating, active, decommissioned, failed]
+      enum: [creating, active, decommissioned, failed, transferring]
     ServiceSummary:
       type: object
       required: [project, name, status, owners, owners_version]
@@ -319,6 +361,17 @@ components:
             Явное предусловие: нагрузка сервиса снята из K8s. В MVP K8s-worker
             отсутствует, поэтому снятие подтверждается клиентом (ADR-0012).
             false → 422 до любых побочных эффектов.
+    TransferServiceRequest:
+      type: object
+      required: [target_project]
+      properties:
+        target_project:
+          type: string
+          minLength: 1
+          description: >
+            Целевой проект-владелец (target), в который переносится сервис. Должен
+            отличаться от исходного проекта; пара (target_project, name) должна
+            быть свободна, иначе 409.
     Error:
       type: object
       required: [error]

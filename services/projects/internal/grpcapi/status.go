@@ -29,6 +29,8 @@ func statusToProto(s repository.Status) (projectsv1.ServiceStatus, error) {
 		return projectsv1.ServiceStatus_SERVICE_STATUS_DECOMMISSIONED, nil
 	case repository.StatusFailed:
 		return projectsv1.ServiceStatus_SERVICE_STATUS_FAILED, nil
+	case repository.StatusTransferring:
+		return projectsv1.ServiceStatus_SERVICE_STATUS_TRANSFERRING, nil
 	default:
 		return projectsv1.ServiceStatus_SERVICE_STATUS_UNSPECIFIED, fmt.Errorf("grpcapi: неизвестный статус %q", s)
 	}

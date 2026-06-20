@@ -7,6 +7,7 @@ const ServiceStatus = z.enum([
   "active",
   "decommissioned",
   "failed",
+  "transferring",
 ]);
 const ServiceSummary = z
   .object({
@@ -40,6 +41,9 @@ const SetServiceOwnersRequest = z
 const SetServiceOwnersResult = z
   .object({ owners: z.array(z.string()), owners_version: z.number().int() })
   .passthrough();
+const TransferServiceRequest = z
+  .object({ target_project: z.string().min(1) })
+  .passthrough();
 
 export const schemas = {
   HealthStatus,
@@ -52,6 +56,7 @@ export const schemas = {
   DecommissionServiceRequest,
   SetServiceOwnersRequest,
   SetServiceOwnersResult,
+  TransferServiceRequest,
 };
 
 const endpoints = makeApi([
@@ -248,6 +253,60 @@ const endpoints = makeApi([
       {
         status: 409,
         description: `Конфликт состояния (например, имя сервиса уже занято)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/projects/:project/services/:name/transfer",
+    alias: "transferService",
+    description: `Переносит сервис в другой проект (смена project-владельца): id записи каталога сохраняется, меняется проект (source→target), владельцы переезжают вместе с записью. Перенос выполняется асинхронно (Saga) с ТОЧКОЙ НЕВОЗВРАТА на переносе репозитория GitLab: каталог active→transferring → transfer GitLab → миграция путей Vault → метаданные Harbor → каталог transferring→active (project&#x3D;target) → перенос ролей владельцев в IDM. Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом (ADR-0013). Идемпотентно: повтор на уже перенесённом сервисе → 200. Допустим только исходный статус active; недопустимый статус → 422; занятое имя в target или конкурентная смена → 409; отсутствие сервиса → 404; отказ RBAC (transfer/transfer_in) → 403.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ target_project: z.string().min(1) }).passthrough(),
+      },
+      {
+        name: "project",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: ServiceSummary,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 409,
+        description: `Конфликт состояния (например, имя сервиса уже занято)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],

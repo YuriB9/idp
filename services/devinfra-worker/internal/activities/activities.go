@@ -18,6 +18,7 @@ import (
 	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
+	"github.com/YuriB9/idp/services/projects/transfer"
 )
 
 // StatusStore — зависимость финальных activities от слоя каталога (guarded-CAS).
@@ -43,6 +44,14 @@ type RoleAdmin interface {
 // (guarded-CAS ACTIVE→DECOMMISSIONED, ADR-0012).
 type DecommStore interface {
 	Decommission(ctx context.Context, serviceID string) error
+}
+
+// TransferStore — зависимость activities переноса от слоя каталога (guarded-CAS
+// смены project в две фазы + компенсация, ADR-0013).
+type TransferStore interface {
+	BeginTransfer(ctx context.Context, serviceID, target string) error
+	CommitTransfer(ctx context.Context, serviceID, target string) error
+	AbortTransfer(ctx context.Context, serviceID string) error
 }
 
 // LoadChecker — граница проверки снятой нагрузки K8s (ADR-0012). В MVP реализация
@@ -74,6 +83,7 @@ type Activities struct {
 	owners      OwnersStore
 	idmRoles    RoleAdmin
 	decomm      DecommStore
+	xfer        TransferStore
 	loadChecker LoadChecker
 }
 
@@ -93,6 +103,9 @@ func WithDecommission(d DecommStore) Option { return func(a *Activities) { a.dec
 // WithLoadChecker подменяет проверку снятой нагрузки K8s (по умолчанию —
 // FlagLoadChecker). Точка расширения под будущий K8s-worker (ADR-0012).
 func WithLoadChecker(l LoadChecker) Option { return func(a *Activities) { a.loadChecker = l } }
+
+// WithTransfer подключает смену project в каталоге (сценарий переноса, ADR-0013).
+func WithTransfer(t TransferStore) Option { return func(a *Activities) { a.xfer = t } }
 
 // New собирает набор activities. Зависимости сценариев смены владельцев и вывода
 // из эксплуатации подключаются опциями WithOwners/WithIDMRoles/WithDecommission.
@@ -287,6 +300,67 @@ func (a *Activities) CatalogDecommission(ctx context.Context, ref provisioning.R
 	return classify(a.decomm.Decommission(ctx, ref.ServiceID))
 }
 
+// --- Перенос сервиса (смена project) ---
+
+// CatalogBeginTransfer — guarded-CAS ACTIVE→TRANSFERRING с проверкой свободы
+// (target, name) (идемпотентно). Занятое имя/конфликт/предусловие (ErrConflict/
+// ErrPrecondition) ретраем не исправить → non-retryable.
+func (a *Activities) CatalogBeginTransfer(ctx context.Context, in transfer.CatalogTransferInput) error {
+	return classify(a.xfer.BeginTransfer(ctx, in.ServiceID, in.Target))
+}
+
+// CatalogCommitTransfer — guarded-CAS TRANSFERRING→ACTIVE + project=target
+// (идемпотентно). Конфликт guarded-CAS (ErrConflict) → non-retryable.
+func (a *Activities) CatalogCommitTransfer(ctx context.Context, in transfer.CatalogTransferInput) error {
+	return classify(a.xfer.CommitTransfer(ctx, in.ServiceID, in.Target))
+}
+
+// CatalogAbortTransfer — компенсация: guarded-CAS TRANSFERRING→ACTIVE (идемпотентно).
+func (a *Activities) CatalogAbortTransfer(ctx context.Context, in transfer.CatalogTransferInput) error {
+	return a.xfer.AbortTransfer(ctx, in.ServiceID)
+}
+
+// GitLabTransferRepo переносит репозиторий в группу target (идемпотентно). Точка
+// невозврата: компенсации нет.
+func (a *Activities) GitLabTransferRepo(ctx context.Context, ref transfer.TransferRef) error {
+	activity.RecordHeartbeat(ctx)
+	r := provisioning.ResourceRef{ServiceID: ref.ServiceID, Project: ref.Source, Name: ref.Name}
+	return classify(a.gitlab.TransferRepo(ctx, r, ref.Target))
+}
+
+// VaultMigratePaths мигрирует пути секретов source→target (копия + новые политики
+// + очистка старых, идемпотентно). Секреты не логируются.
+func (a *Activities) VaultMigratePaths(ctx context.Context, ref transfer.TransferRef) error {
+	activity.RecordHeartbeat(ctx)
+	r := provisioning.ResourceRef{ServiceID: ref.ServiceID, Project: ref.Source, Name: ref.Name}
+	return classify(a.vault.MigratePaths(ctx, r, ref.Target))
+}
+
+// HarborUpdateMetadata обновляет метаданные/права директории под target (идемпотентно).
+func (a *Activities) HarborUpdateMetadata(ctx context.Context, ref transfer.TransferRef) error {
+	activity.RecordHeartbeat(ctx)
+	r := provisioning.ResourceRef{ServiceID: ref.ServiceID, Project: ref.Source, Name: ref.Name}
+	return classify(a.harbor.UpdateMetadata(ctx, r, ref.Target))
+}
+
+// TransferOwnerRoles переносит роли владельцев между проектами: для каждого
+// субъекта-владельца отзывает owner:project:<source> и выдаёт owner:project:<target>
+// (инвалидация кэша — на стороне IDM). Идемпотентно.
+func (a *Activities) TransferOwnerRoles(ctx context.Context, in transfer.TransferRolesInput) error {
+	activity.RecordHeartbeat(ctx)
+	srcRole := "owner:project:" + in.Source
+	dstRole := "owner:project:" + in.Target
+	for _, subject := range in.Owners {
+		if err := a.idmRoles.AssignRole(ctx, subject, dstRole); err != nil {
+			return classify(err)
+		}
+		if err := a.idmRoles.RevokeRole(ctx, subject, srcRole); err != nil {
+			return classify(err)
+		}
+	}
+	return nil
+}
+
 // Register регистрирует все activities под именами из пакетов provisioning,
 // changeowners и decommission на переданном worker'е.
 func (a *Activities) Register(r registrar) {
@@ -317,4 +391,12 @@ func (a *Activities) Register(r registrar) {
 	reg(a.HarborSetWritable, decommission.ActivityHarborSetWritable)
 	reg(a.VaultRevokeSecretID, decommission.ActivityVaultRevokeSecretID)
 	reg(a.CatalogDecommission, decommission.ActivityCatalogDecommission)
+	// Перенос сервиса.
+	reg(a.CatalogBeginTransfer, transfer.ActivityCatalogBeginTransfer)
+	reg(a.CatalogCommitTransfer, transfer.ActivityCatalogCommitTransfer)
+	reg(a.CatalogAbortTransfer, transfer.ActivityCatalogAbortTransfer)
+	reg(a.GitLabTransferRepo, transfer.ActivityGitLabTransferRepo)
+	reg(a.VaultMigratePaths, transfer.ActivityVaultMigratePaths)
+	reg(a.HarborUpdateMetadata, transfer.ActivityHarborUpdateMetadata)
+	reg(a.TransferOwnerRoles, transfer.ActivityTransferOwnerRoles)
 }

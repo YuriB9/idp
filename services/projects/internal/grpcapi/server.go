@@ -28,6 +28,7 @@ type Catalog interface {
 	CreateService(ctx context.Context, project, name string) (repository.Service, error)
 	SetServiceOwners(ctx context.Context, project, name string, owners []string, expectedVersion int64) ([]string, int64, error)
 	DecommissionService(ctx context.Context, project, name string, loadDrained bool) (repository.Service, error)
+	TransferService(ctx context.Context, project, name, target string) (repository.Service, error)
 }
 
 // AccessChecker — зависимость от IDM (RBAC CheckAccess). Совместима с
@@ -165,6 +166,39 @@ func (s *Server) DecommissionService(ctx context.Context, req *projectsv1.Decomm
 		return nil, s.mapError(ctx, "DecommissionService", perr)
 	}
 	return &projectsv1.DecommissionServiceResponse{Service: p}, nil
+}
+
+// TransferService переносит сервис в другой проект (смена project-владельца):
+// валидирует запрос, проверяет ДВА права (transfer на исходном проекте И
+// transfer_in на целевом, fail-closed) и запускает workflow «Перенос». Идемпотентно:
+// уже перенесённый сервис → успех (no-op). Недопустимый исходный статус →
+// FailedPrecondition; занятое имя в target/конкурентная смена → Aborted; отсутствие
+// записи → NotFound. Внутренние детали наружу не раскрываются.
+func (s *Server) TransferService(ctx context.Context, req *projectsv1.TransferServiceRequest) (*projectsv1.TransferServiceResponse, error) {
+	if req.GetProject() == "" || req.GetName() == "" || req.GetTargetProject() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project, name и target_project обязательны")
+	}
+	if req.GetProject() == req.GetTargetProject() {
+		return nil, status.Error(codes.InvalidArgument, "target_project должен отличаться от project")
+	}
+	// RBAC (defense-in-depth, fail-closed): перенос затрагивает ДВА проекта —
+	// требуется право transfer на исходном И transfer_in на целевом. Без права на
+	// target нельзя «вынести» сервис в чужой проект (ADR-0013).
+	if err := s.authorize(ctx, req.GetProject(), "transfer"); err != nil {
+		return nil, err
+	}
+	if err := s.authorize(ctx, req.GetTargetProject(), "transfer_in"); err != nil {
+		return nil, err
+	}
+	svc, err := s.catalog.TransferService(ctx, req.GetProject(), req.GetName(), req.GetTargetProject())
+	if err != nil {
+		return nil, s.mapError(ctx, "TransferService", err)
+	}
+	p, perr := serviceToProto(svc)
+	if perr != nil {
+		return nil, s.mapError(ctx, "TransferService", perr)
+	}
+	return &projectsv1.TransferServiceResponse{Service: p}, nil
 }
 
 // authorize проверяет право субъекта на действие над проектом через IDM

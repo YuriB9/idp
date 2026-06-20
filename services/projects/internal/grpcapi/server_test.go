@@ -40,6 +40,11 @@ type fakeCatalog struct {
 	decommErr    error
 	decommOut    repository.Service
 	decommCalled bool
+
+	// поля для TransferService
+	transferErr    error
+	transferOut    repository.Service
+	transferCalled bool
 }
 
 func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, error) {
@@ -63,6 +68,11 @@ func (f *fakeCatalog) SetServiceOwners(_ context.Context, _, _ string, _ []strin
 func (f *fakeCatalog) DecommissionService(_ context.Context, _, _ string, _ bool) (repository.Service, error) {
 	f.decommCalled = true
 	return f.decommOut, f.decommErr
+}
+
+func (f *fakeCatalog) TransferService(_ context.Context, _, _, _ string) (repository.Service, error) {
+	f.transferCalled = true
+	return f.transferOut, f.transferErr
 }
 
 func discardLogger() *slog.Logger {
@@ -476,6 +486,7 @@ func TestStatusToProto(t *testing.T) {
 		{name: "active", in: repository.StatusActive, want: projectsv1.ServiceStatus_SERVICE_STATUS_ACTIVE},
 		{name: "decommissioned", in: repository.StatusDecommissioned, want: projectsv1.ServiceStatus_SERVICE_STATUS_DECOMMISSIONED},
 		{name: "failed", in: repository.StatusFailed, want: projectsv1.ServiceStatus_SERVICE_STATUS_FAILED},
+		{name: "transferring", in: repository.StatusTransferring, want: projectsv1.ServiceStatus_SERVICE_STATUS_TRANSFERRING},
 		{name: "неизвестный → ошибка", in: repository.Status("bogus"), wantErr: true},
 	}
 	for _, tc := range tests {
@@ -494,6 +505,120 @@ func TestStatusToProto(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("statusToProto(%q) = %v, ожидали %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// actionIDM — стаб IDM, отказывающий по конкретному действию (для проверки
+// двусторонней авторизации переноса: deny на source vs deny на target).
+type actionIDM struct {
+	denyAction string
+}
+
+func (s actionIDM) CheckAccess(_ context.Context, in *idmv1.CheckAccessRequest, _ ...grpc.CallOption) (*idmv1.CheckAccessResponse, error) {
+	return &idmv1.CheckAccessResponse{Allowed: in.GetAction() != s.denyAction}, nil
+}
+
+// TestTransferServiceMapping покрывает TransferService: успех возвращает итоговое
+// состояние; валидация (пустой target / target==project) → InvalidArgument;
+// предусловие → FailedPrecondition; занятое имя/конфликт → Aborted; NotFound.
+func TestTransferServiceMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		req      *projectsv1.TransferServiceRequest
+		fake     *fakeCatalog
+		wantCode codes.Code
+	}{
+		{
+			name:     "успех → итоговое состояние",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo2"},
+			fake:     &fakeCatalog{transferOut: repository.Service{Project: "demo", Name: "n", Status: repository.StatusActive}},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "пустой target → InvalidArgument",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "target == project → InvalidArgument",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "недопустимый статус → FailedPrecondition",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo2"},
+			fake:     &fakeCatalog{transferErr: fmt.Errorf("обёртка: %w", errs.ErrPrecondition)},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "занятое имя/конфликт → Aborted",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo2"},
+			fake:     &fakeCatalog{transferErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
+			wantCode: codes.Aborted,
+		},
+		{
+			name:     "не найдено → NotFound",
+			req:      &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo2"},
+			fake:     &fakeCatalog{transferErr: fmt.Errorf("обёртка: %w", errs.ErrNotFound)},
+			wantCode: codes.NotFound,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := New(tc.fake, allowIDM(), discardLogger())
+			resp, err := srv.TransferService(context.Background(), tc.req)
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("неожиданная ошибка: %v", err)
+				}
+				if resp.GetService().GetName() != "n" {
+					t.Fatalf("ответ = %+v", resp.GetService())
+				}
+				return
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != tc.wantCode {
+				t.Fatalf("код = %v, ожидали %v", st.Code(), tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestTransferServiceRBAC: отказ по ЛЮБОМУ из двух прав (transfer на source ИЛИ
+// transfer_in на target) и недоступность IDM → PermissionDenied, доменная
+// операция не выполняется (fail-closed, ADR-0013).
+func TestTransferServiceRBAC(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		idm  AccessChecker
+	}{
+		{name: "нет права transfer на source", idm: actionIDM{denyAction: "transfer"}},
+		{name: "нет права transfer_in на target", idm: actionIDM{denyAction: "transfer_in"}},
+		{name: "IDM недоступен (fail-closed)", idm: stubIDM{err: status.Error(codes.Unavailable, "down")}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeCatalog{transferOut: repository.Service{Project: "demo", Name: "n", Status: repository.StatusActive}}
+			srv := New(fake, tc.idm, discardLogger())
+			_, err := srv.TransferService(context.Background(), &projectsv1.TransferServiceRequest{Project: "demo", Name: "n", TargetProject: "demo2"})
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.PermissionDenied {
+				t.Fatalf("ожидали PermissionDenied, получили %v", err)
+			}
+			if fake.transferCalled {
+				t.Fatal("при отказе RBAC доменная операция не должна выполняться")
 			}
 		})
 	}

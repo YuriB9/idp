@@ -14,6 +14,7 @@ import (
 	"github.com/YuriB9/idp/services/projects/changeowners"
 	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
+	"github.com/YuriB9/idp/services/projects/transfer"
 )
 
 // Starter запускает workflow создания на заданной task-queue.
@@ -91,6 +92,30 @@ func (s *Starter) StartDecommission(ctx context.Context, serviceID, project, nam
 	}
 	if _, err := s.client.ExecuteWorkflow(ctx, opts, decommission.DecommissionWorkflow, in); err != nil {
 		return fmt.Errorf("wfstarter: запуск workflow вывода из эксплуатации: %w", err)
+	}
+	return nil
+}
+
+// StartTransfer запускает workflow «Перенос сервиса» с детерминированным
+// WorkflowID на пару (source, name). Политика та же, что у прочих сценариев: не
+// стартовать второй конкурентный workflow для того же сервиса; повторный запуск
+// после терминального статуса допускается.
+func (s *Starter) StartTransfer(ctx context.Context, serviceID, source, target, name string, owners []string) error {
+	opts := client.StartWorkflowOptions{
+		ID:                       transfer.WorkflowID(source, name),
+		TaskQueue:                s.taskQueue,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
+		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+	}
+	in := transfer.TransferInput{
+		ServiceID: serviceID,
+		Source:    source,
+		Target:    target,
+		Name:      name,
+		Owners:    owners,
+	}
+	if _, err := s.client.ExecuteWorkflow(ctx, opts, transfer.TransferServiceWorkflow, in); err != nil {
+		return fmt.Errorf("wfstarter: запуск workflow переноса: %w", err)
 	}
 	return nil
 }

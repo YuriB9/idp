@@ -26,6 +26,13 @@ type Memory struct {
 	harborReadOnly map[string]bool
 	// vaultRevoked — флаг отзыва активных SecretID/токенов Vault (вывод из эксплуатации).
 	vaultRevoked map[string]bool
+	// repoGroup — текущая группа (проект) репозитория GitLab по ключу сервиса
+	// (перенос). Отсутствие ключа означает исходную группу.
+	repoGroup map[string]string
+	// vaultPath — текущий проект-путь секретов Vault по ключу сервиса (перенос).
+	vaultPath map[string]string
+	// harborProject — текущий проект-владелец метаданных Harbor по ключу сервиса (перенос).
+	harborProject map[string]string
 }
 
 // NewMemory создаёт пустой in-memory набор клиентов.
@@ -40,6 +47,9 @@ func NewMemory() *Memory {
 		archived:       map[string]bool{},
 		harborReadOnly: map[string]bool{},
 		vaultRevoked:   map[string]bool{},
+		repoGroup:      map[string]string{},
+		vaultPath:      map[string]string{},
+		harborProject:  map[string]string{},
 	}
 }
 
@@ -118,6 +128,13 @@ func (m *Memory) Unarchive(_ context.Context, ref provisioning.ResourceRef) erro
 	return nil
 }
 
+func (m *Memory) TransferRepo(_ context.Context, ref provisioning.ResourceRef, target string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.repoGroup[key(ref)] = target // идемпотентно: повторная установка той же группы — no-op
+	return nil
+}
+
 func (m *Memory) InjectVariables(_ context.Context, in provisioning.InjectSecretsInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -163,6 +180,13 @@ func (m *Memory) SetWritable(_ context.Context, ref provisioning.ResourceRef) er
 	return nil
 }
 
+func (m *Memory) UpdateMetadata(_ context.Context, ref provisioning.ResourceRef, target string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.harborProject[key(ref)] = target // идемпотентно
+	return nil
+}
+
 // --- Vault ---
 
 func (m *Memory) SetupAppRole(_ context.Context, ref provisioning.ResourceRef) (provisioning.VaultResult, error) {
@@ -197,6 +221,13 @@ func (m *Memory) RevokeSecretID(_ context.Context, ref provisioning.ResourceRef)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.vaultRevoked[key(ref)] = true // идемпотентно; необратимо (компенсации нет)
+	return nil
+}
+
+func (m *Memory) MigratePaths(_ context.Context, ref provisioning.ResourceRef, target string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vaultPath[key(ref)] = target // идемпотентно: копия секретов + новые политики + очистка старых
 	return nil
 }
 
@@ -256,4 +287,26 @@ func (m *Memory) IsVaultRevoked(ref provisioning.ResourceRef) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.vaultRevoked[key(ref)]
+}
+
+// RepoGroup возвращает целевую группу репозитория GitLab для ref после переноса
+// (пусто, если перенос не выполнялся).
+func (m *Memory) RepoGroup(ref provisioning.ResourceRef) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.repoGroup[key(ref)]
+}
+
+// VaultPath возвращает целевой проект-путь секретов Vault для ref после переноса.
+func (m *Memory) VaultPath(ref provisioning.ResourceRef) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.vaultPath[key(ref)]
+}
+
+// HarborProject возвращает целевой проект-владелец метаданных Harbor для ref.
+func (m *Memory) HarborProject(ref provisioning.ResourceRef) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.harborProject[key(ref)]
 }

@@ -85,6 +85,26 @@ func TestIntegrationCheckAccess_SeededDemo(t *testing.T) {
 			wantCode: codes.OK,
 		},
 		{
+			name:        "demo-user transfer project:demo → allow (source)",
+			req:         &idmv1.CheckAccessRequest{Subject: "demo-user", Resource: "project:demo", Action: "transfer"},
+			wantAllowed: true, wantCode: codes.OK,
+		},
+		{
+			name:        "demo-user transfer_in project:demo2 → allow (target)",
+			req:         &idmv1.CheckAccessRequest{Subject: "demo-user", Resource: "project:demo2", Action: "transfer_in"},
+			wantAllowed: true, wantCode: codes.OK,
+		},
+		{
+			name:     "transfer_in на source project:demo → deny (deny-by-default)",
+			req:      &idmv1.CheckAccessRequest{Subject: "demo-user", Resource: "project:demo", Action: "transfer_in"},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "transfer на target project:demo2 → deny (deny-by-default)",
+			req:      &idmv1.CheckAccessRequest{Subject: "demo-user", Resource: "project:demo2", Action: "transfer"},
+			wantCode: codes.OK,
+		},
+		{
 			name:     "пустой subject → InvalidArgument",
 			req:      &idmv1.CheckAccessRequest{Resource: "project:demo", Action: "create"},
 			wantCode: codes.InvalidArgument,

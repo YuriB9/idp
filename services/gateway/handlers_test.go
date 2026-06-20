@@ -25,18 +25,20 @@ import (
 // stubProjectsClient — стаб gRPC-клиента каталога: возвращает заранее заданные
 // ответы/ошибки, не выходя в сеть.
 type stubProjectsClient struct {
-	getResp    *projectsv1.GetServiceResponse
-	listResp   *projectsv1.ListServicesResponse
-	createResp *projectsv1.CreateServiceResponse
-	ownersResp *projectsv1.SetServiceOwnersResponse
-	decommResp *projectsv1.DecommissionServiceResponse
-	err        error
+	getResp      *projectsv1.GetServiceResponse
+	listResp     *projectsv1.ListServicesResponse
+	createResp   *projectsv1.CreateServiceResponse
+	ownersResp   *projectsv1.SetServiceOwnersResponse
+	decommResp   *projectsv1.DecommissionServiceResponse
+	transferResp *projectsv1.TransferServiceResponse
+	err          error
 
 	// gotCreate фиксирует аргументы последнего CreateService для проверок.
-	gotCreate *projectsv1.CreateServiceRequest
-	gotList   *projectsv1.ListServicesRequest
-	gotOwners *projectsv1.SetServiceOwnersRequest
-	gotDecomm *projectsv1.DecommissionServiceRequest
+	gotCreate   *projectsv1.CreateServiceRequest
+	gotList     *projectsv1.ListServicesRequest
+	gotOwners   *projectsv1.SetServiceOwnersRequest
+	gotDecomm   *projectsv1.DecommissionServiceRequest
+	gotTransfer *projectsv1.TransferServiceRequest
 }
 
 func (s *stubProjectsClient) GetService(_ context.Context, _ *projectsv1.GetServiceRequest, _ ...grpc.CallOption) (*projectsv1.GetServiceResponse, error) {
@@ -76,6 +78,14 @@ func (s *stubProjectsClient) DecommissionService(_ context.Context, in *projects
 		return nil, s.err
 	}
 	return s.decommResp, nil
+}
+
+func (s *stubProjectsClient) TransferService(_ context.Context, in *projectsv1.TransferServiceRequest, _ ...grpc.CallOption) (*projectsv1.TransferServiceResponse, error) {
+	s.gotTransfer = in
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.transferResp, nil
 }
 
 // stubIDMClient — стаб gRPC-клиента IDM: возвращает заранее заданное решение
@@ -600,5 +610,122 @@ func TestRBACRequestShape(t *testing.T) {
 
 	if idm.gotReq.GetResource() != "project:demo" || idm.gotReq.GetAction() != "create" {
 		t.Fatalf("некорректная форма запроса RBAC: %+v", idm.gotReq)
+	}
+}
+
+// denyActionIDMClient — стаб IDM, отказывающий по конкретному действию (для
+// проверки двусторонней авторизации переноса: deny на transfer vs transfer_in).
+type denyActionIDMClient struct {
+	denyAction string
+}
+
+func (s *denyActionIDMClient) CheckAccess(_ context.Context, in *idmv1.CheckAccessRequest, _ ...grpc.CallOption) (*idmv1.CheckAccessResponse, error) {
+	return &idmv1.CheckAccessResponse{Allowed: in.GetAction() != s.denyAction}, nil
+}
+
+// TestTransferService покрывает периметр переноса: happy-path (target_project
+// уходит в gRPC, transferring в ответе), занятое имя → 409, недопустимый статус →
+// 422, пустой target → 400.
+func TestTransferService(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		body     string
+		stub     *stubProjectsClient
+		wantCode int
+		wantCall bool
+	}{
+		{
+			name: "happy-path 200 (transferring)",
+			body: `{"target_project":"demo2"}`,
+			stub: &stubProjectsClient{transferResp: &projectsv1.TransferServiceResponse{Service: &projectsv1.Service{
+				Project: "demo", Name: "svc", Status: projectsv1.ServiceStatus_SERVICE_STATUS_TRANSFERRING,
+			}}},
+			wantCode: http.StatusOK,
+			wantCall: true,
+		},
+		{
+			name:     "занятое имя в target → 409",
+			body:     `{"target_project":"demo2"}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.Aborted, "занято")},
+			wantCode: http.StatusConflict,
+			wantCall: true,
+		},
+		{
+			name:     "недопустимый статус → 422",
+			body:     `{"target_project":"demo2"}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.FailedPrecondition, "не active")},
+			wantCode: http.StatusUnprocessableEntity,
+			wantCall: true,
+		},
+		{
+			name:     "пустой target → 400",
+			body:     `{"target_project":""}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "битый JSON → 400",
+			body:     `{`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			router := newTestRouter(tt.stub)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/projects/demo/services/svc/transfer", strings.NewReader(tt.body))
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("код = %d, ожидалось %d (body=%q)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantCall && (tt.stub.gotTransfer == nil || tt.stub.gotTransfer.GetTargetProject() != "demo2") {
+				t.Fatalf("TransferService вызван некорректно: %+v", tt.stub.gotTransfer)
+			}
+			if !tt.wantCall && tt.stub.gotTransfer != nil {
+				t.Fatalf("gRPC не должен вызываться при невалидном теле")
+			}
+			if tt.wantCode == http.StatusOK {
+				var got serviceSummary
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("ответ не парсится: %v", err)
+				}
+				if got.Status != "transferring" {
+					t.Fatalf("тело = %+v", got)
+				}
+			}
+		})
+	}
+}
+
+// TestTransferRBAC: отказ по любому из двух прав (transfer на source ИЛИ
+// transfer_in на target) → 403 без доменного gRPC (fail-closed, ADR-0013).
+func TestTransferRBAC(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		deny string
+	}{
+		{name: "нет transfer на source", deny: "transfer"},
+		{name: "нет transfer_in на target", deny: "transfer_in"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			projects := &stubProjectsClient{}
+			router := newTestRouterWithIDM(projects, &denyActionIDMClient{denyAction: tt.deny})
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/projects/demo/services/svc/transfer", strings.NewReader(`{"target_project":"demo2"}`)))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("код = %d, ожидалось 403", rec.Code)
+			}
+			if projects.gotTransfer != nil {
+				t.Fatalf("при отказе RBAC доменный gRPC не должен вызываться")
+			}
+		})
 	}
 }

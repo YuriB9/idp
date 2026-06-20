@@ -24,13 +24,17 @@ const (
 	StatusDecommissioned Status = "decommissioned"
 	// StatusFailed — провизия завершилась неустранимой ошибкой.
 	StatusFailed Status = "failed"
+	// StatusTransferring — сервис в процессе переноса в другой проект (ADR-0013).
+	// Транзитный статус: защищает от конкурентных операций (guarded-CAS требует
+	// active) и даёт наблюдаемость незавершённого переноса.
+	StatusTransferring Status = "transferring"
 )
 
 // ParseStatus переводит строку из БД в доменный Status. Незнакомое значение —
 // ошибка, а не молчаливый дефолт (см. docs/IDP_MVP_plan.md, БЛОК 8–9).
 func ParseStatus(raw string) (Status, error) {
 	switch Status(raw) {
-	case StatusCreating, StatusActive, StatusDecommissioned, StatusFailed:
+	case StatusCreating, StatusActive, StatusDecommissioned, StatusFailed, StatusTransferring:
 		return Status(raw), nil
 	default:
 		return "", fmt.Errorf("repository: неизвестный статус %q", raw)

@@ -16,6 +16,11 @@ enum ServiceStatus {
   SERVICE_STATUS_ACTIVE = 2;
   SERVICE_STATUS_DECOMMISSIONED = 3;
   SERVICE_STATUS_FAILED = 4;
+  // SERVICE_STATUS_TRANSFERRING — транзитный статус на время переноса сервиса в
+  // другой проект (ADR-0013). Защищает от конкурентных операций (guarded-CAS
+  // active→transferring) и даёт наблюдаемость незавершённого переноса.
+  // Аддитивное значение (новый номер 5; существующие значения не меняются).
+  SERVICE_STATUS_TRANSFERRING = 5;
 }
 
 // ProjectsService — интерфейс каталога. Чтение (GetService/ListServices) и
@@ -55,6 +60,21 @@ service ProjectsService {
   // FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
   // NotFound. BREAKING: добавление метода в существующий сервис-контракт.
   rpc DecommissionService(DecommissionServiceRequest) returns (DecommissionServiceResponse);
+  // TransferService переносит сервис в другой проект (смена project-владельца):
+  // id записи каталога СОХРАНЯЕТСЯ, меняется колонка project (source→target),
+  // владельцы переезжают вместе с записью. Перенос выполняется асинхронно
+  // Temporal-workflow «Перенос» (Saga) с детерминированным WorkflowID: каталог
+  // active→transferring → перенос репозитория GitLab в новую группу (ТОЧКА
+  // НЕВОЗВРАТА) → миграция путей/политик Vault → обновление метаданных Harbor →
+  // каталог transferring→active (project=target) → перенос ролей владельцев в IDM.
+  // Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом
+  // (ADR-0013). Семантика идемпотентна: повторный вызов на уже перенесённом
+  // сервисе (project уже равен target) → успех (no-op). Допустимый исходный
+  // статус — только ACTIVE; creating/failed/decommissioned/transferring →
+  // FailedPrecondition; занятое имя в target или конкурентная смена статуса →
+  // Aborted; отсутствие записи → NotFound. BREAKING: добавление метода в
+  // существующий сервис-контракт.
+  rpc TransferService(TransferServiceRequest) returns (TransferServiceResponse);
 }
 
 // Service — запись каталога (единица-сервис).
@@ -158,5 +178,21 @@ message DecommissionServiceRequest {
 
 message DecommissionServiceResponse {
   // service — итоговое состояние записи (status=DECOMMISSIONED, decommissioned_at).
+  Service service = 1;
+}
+
+message TransferServiceRequest {
+  // project — исходный проект-владелец (source), из которого переносится сервис.
+  string project = 1;
+  // name — имя переносимого сервиса (сохраняется при переносе).
+  string name = 2;
+  // target_project — целевой проект-владелец (target), в который переносится
+  // сервис. Должен отличаться от project; пара (target_project, name) должна быть
+  // свободна, иначе конфликт.
+  string target_project = 3;
+}
+
+message TransferServiceResponse {
+  // service — итоговое состояние записи (project=target_project, status=ACTIVE).
   Service service = 1;
 }

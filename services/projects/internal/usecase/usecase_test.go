@@ -55,6 +55,11 @@ type fakeStarter struct {
 	// поля для StartDecommission
 	decommCalled   bool
 	gotLoadDrained bool
+
+	// поля для StartTransfer
+	transferCalled bool
+	gotTarget      string
+	gotOwners      []string
 }
 
 func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string) error {
@@ -74,6 +79,13 @@ func (f *fakeStarter) StartDecommission(_ context.Context, serviceID, project, n
 	f.decommCalled = true
 	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
 	f.gotLoadDrained = loadDrained
+	return f.err
+}
+
+func (f *fakeStarter) StartTransfer(_ context.Context, serviceID, source, target, name string, owners []string) error {
+	f.transferCalled = true
+	f.gotServiceID, f.gotProject, f.gotName = serviceID, source, name
+	f.gotTarget, f.gotOwners = target, owners
 	return f.err
 }
 
@@ -282,6 +294,96 @@ func TestSetServiceOwners_NotFound(t *testing.T) {
 
 	uc := usecase.New(newMemStore(), usecase.WithStarter(&fakeStarter{}))
 	if _, _, err := uc.SetServiceOwners(context.Background(), "p", "missing", []string{"a"}, 0); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", err)
+	}
+}
+
+// TestTransferService_StartsWorkflow: активный сервис → запускается workflow
+// переноса с source/target/owners; возвращается текущая запись.
+func TestTransferService_StartsWorkflow(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	id := uuid.New()
+	if err := store.Create(ctx, repository.Service{ID: id, Project: "demo", Name: "svc", Status: repository.StatusActive, Owners: []string{"alice"}}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	svc, err := uc.TransferService(ctx, "demo", "svc", "demo2")
+	if err != nil {
+		t.Fatalf("TransferService: %v", err)
+	}
+	if !starter.transferCalled {
+		t.Fatal("ожидали запуск workflow переноса")
+	}
+	if starter.gotProject != "demo" || starter.gotTarget != "demo2" || starter.gotName != "svc" {
+		t.Fatalf("в workflow переданы неверные аргументы: %+v", starter)
+	}
+	if len(starter.gotOwners) != 1 || starter.gotOwners[0] != "alice" {
+		t.Fatalf("ожидали owners=[alice], получили %v", starter.gotOwners)
+	}
+	if svc.Project != "demo" || svc.Status != repository.StatusActive {
+		t.Fatalf("ожидали исходную запись demo/active, получили %+v", svc)
+	}
+}
+
+// TestTransferService_IdempotentRepeat: повтор на уже перенесённом сервисе
+// (есть активная (target, name), нет (source, name)) → no-op без запуска workflow.
+func TestTransferService_IdempotentRepeat(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	// Сервис уже в target.
+	if err := store.Create(ctx, repository.Service{ID: uuid.New(), Project: "demo2", Name: "svc", Status: repository.StatusActive}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	svc, err := uc.TransferService(ctx, "demo", "svc", "demo2")
+	if err != nil {
+		t.Fatalf("ожидали идемпотентный успех, получили %v", err)
+	}
+	if starter.transferCalled {
+		t.Fatal("workflow не должен стартовать для уже перенесённого сервиса")
+	}
+	if svc.Project != "demo2" {
+		t.Fatalf("ожидали итоговую запись в demo2, получили %+v", svc)
+	}
+}
+
+// TestTransferService_PreconditionStatus: недопустимый исходный статус
+// (transferring/creating/...) → ErrPrecondition без запуска workflow.
+func TestTransferService_PreconditionStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newMemStore()
+	ctx := context.Background()
+	if err := store.Create(ctx, repository.Service{ID: uuid.New(), Project: "demo", Name: "svc", Status: repository.StatusTransferring}); err != nil {
+		t.Fatalf("посев: %v", err)
+	}
+	starter := &fakeStarter{}
+	uc := usecase.New(store, usecase.WithStarter(starter))
+
+	if _, err := uc.TransferService(ctx, "demo", "svc", "demo2"); !errors.Is(err, errs.ErrPrecondition) {
+		t.Fatalf("ожидали ErrPrecondition, получили %v", err)
+	}
+	if starter.transferCalled {
+		t.Fatal("workflow не должен стартовать при недопустимом статусе")
+	}
+}
+
+// TestTransferService_NotFound: отсутствующий сервис (и в source, и в target) →
+// ErrNotFound.
+func TestTransferService_NotFound(t *testing.T) {
+	t.Parallel()
+
+	uc := usecase.New(newMemStore(), usecase.WithStarter(&fakeStarter{}))
+	if _, err := uc.TransferService(context.Background(), "demo", "missing", "demo2"); !errors.Is(err, errs.ErrNotFound) {
 		t.Fatalf("ожидали ErrNotFound, получили %v", err)
 	}
 }

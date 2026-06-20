@@ -29,6 +29,7 @@ const (
 	ProjectsService_CreateService_FullMethodName       = "/projects.v1.ProjectsService/CreateService"
 	ProjectsService_SetServiceOwners_FullMethodName    = "/projects.v1.ProjectsService/SetServiceOwners"
 	ProjectsService_DecommissionService_FullMethodName = "/projects.v1.ProjectsService/DecommissionService"
+	ProjectsService_TransferService_FullMethodName     = "/projects.v1.ProjectsService/TransferService"
 )
 
 // ProjectsServiceClient is the client API for ProjectsService service.
@@ -72,6 +73,21 @@ type ProjectsServiceClient interface {
 	// FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
 	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
 	DecommissionService(ctx context.Context, in *DecommissionServiceRequest, opts ...grpc.CallOption) (*DecommissionServiceResponse, error)
+	// TransferService переносит сервис в другой проект (смена project-владельца):
+	// id записи каталога СОХРАНЯЕТСЯ, меняется колонка project (source→target),
+	// владельцы переезжают вместе с записью. Перенос выполняется асинхронно
+	// Temporal-workflow «Перенос» (Saga) с детерминированным WorkflowID: каталог
+	// active→transferring → перенос репозитория GitLab в новую группу (ТОЧКА
+	// НЕВОЗВРАТА) → миграция путей/политик Vault → обновление метаданных Harbor →
+	// каталог transferring→active (project=target) → перенос ролей владельцев в IDM.
+	// Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом
+	// (ADR-0013). Семантика идемпотентна: повторный вызов на уже перенесённом
+	// сервисе (project уже равен target) → успех (no-op). Допустимый исходный
+	// статус — только ACTIVE; creating/failed/decommissioned/transferring →
+	// FailedPrecondition; занятое имя в target или конкурентная смена статуса →
+	// Aborted; отсутствие записи → NotFound. BREAKING: добавление метода в
+	// существующий сервис-контракт.
+	TransferService(ctx context.Context, in *TransferServiceRequest, opts ...grpc.CallOption) (*TransferServiceResponse, error)
 }
 
 type projectsServiceClient struct {
@@ -132,6 +148,16 @@ func (c *projectsServiceClient) DecommissionService(ctx context.Context, in *Dec
 	return out, nil
 }
 
+func (c *projectsServiceClient) TransferService(ctx context.Context, in *TransferServiceRequest, opts ...grpc.CallOption) (*TransferServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TransferServiceResponse)
+	err := c.cc.Invoke(ctx, ProjectsService_TransferService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProjectsServiceServer is the server API for ProjectsService service.
 // All implementations must embed UnimplementedProjectsServiceServer
 // for forward compatibility.
@@ -173,6 +199,21 @@ type ProjectsServiceServer interface {
 	// FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
 	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
 	DecommissionService(context.Context, *DecommissionServiceRequest) (*DecommissionServiceResponse, error)
+	// TransferService переносит сервис в другой проект (смена project-владельца):
+	// id записи каталога СОХРАНЯЕТСЯ, меняется колонка project (source→target),
+	// владельцы переезжают вместе с записью. Перенос выполняется асинхронно
+	// Temporal-workflow «Перенос» (Saga) с детерминированным WorkflowID: каталог
+	// active→transferring → перенос репозитория GitLab в новую группу (ТОЧКА
+	// НЕВОЗВРАТА) → миграция путей/политик Vault → обновление метаданных Harbor →
+	// каталог transferring→active (project=target) → перенос ролей владельцев в IDM.
+	// Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом
+	// (ADR-0013). Семантика идемпотентна: повторный вызов на уже перенесённом
+	// сервисе (project уже равен target) → успех (no-op). Допустимый исходный
+	// статус — только ACTIVE; creating/failed/decommissioned/transferring →
+	// FailedPrecondition; занятое имя в target или конкурентная смена статуса →
+	// Aborted; отсутствие записи → NotFound. BREAKING: добавление метода в
+	// существующий сервис-контракт.
+	TransferService(context.Context, *TransferServiceRequest) (*TransferServiceResponse, error)
 	mustEmbedUnimplementedProjectsServiceServer()
 }
 
@@ -197,6 +238,9 @@ func (UnimplementedProjectsServiceServer) SetServiceOwners(context.Context, *Set
 }
 func (UnimplementedProjectsServiceServer) DecommissionService(context.Context, *DecommissionServiceRequest) (*DecommissionServiceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DecommissionService not implemented")
+}
+func (UnimplementedProjectsServiceServer) TransferService(context.Context, *TransferServiceRequest) (*TransferServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TransferService not implemented")
 }
 func (UnimplementedProjectsServiceServer) mustEmbedUnimplementedProjectsServiceServer() {}
 func (UnimplementedProjectsServiceServer) testEmbeddedByValue()                         {}
@@ -309,6 +353,24 @@ func _ProjectsService_DecommissionService_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProjectsService_TransferService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectsServiceServer).TransferService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectsService_TransferService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectsServiceServer).TransferService(ctx, req.(*TransferServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProjectsService_ServiceDesc is the grpc.ServiceDesc for ProjectsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -335,6 +397,10 @@ var ProjectsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DecommissionService",
 			Handler:    _ProjectsService_DecommissionService_Handler,
+		},
+		{
+			MethodName: "TransferService",
+			Handler:    _ProjectsService_TransferService_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

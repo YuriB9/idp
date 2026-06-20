@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/StatusBadge";
 import { OwnersCard } from "@/components/OwnersCard";
 import { DecommissionCard } from "@/components/DecommissionCard";
+import { TransferCard } from "@/components/TransferCard";
 
 // POLL_INTERVAL_MS — интервал поллинга статуса (см. design.md, стратегия).
 const POLL_INTERVAL_MS = 1500;
@@ -121,6 +122,13 @@ export function ServiceProgressPage() {
           доступно только для активного сервиса (требует права decommission). */}
       {query.data && (
         <DecommissionCard project={project} name={name} status={query.data.status} />
+      )}
+
+      {/* Перенос сервиса в другой проект: действие с подтверждением и
+          предупреждением о необратимости, доступно только для активного сервиса
+          (требует прав transfer на исходном и transfer_in на целевом проекте). */}
+      {query.data && (
+        <TransferCard project={project} name={name} status={query.data.status} />
       )}
     </section>
   );
