@@ -24,10 +24,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ProjectsService_GetService_FullMethodName       = "/projects.v1.ProjectsService/GetService"
-	ProjectsService_ListServices_FullMethodName     = "/projects.v1.ProjectsService/ListServices"
-	ProjectsService_CreateService_FullMethodName    = "/projects.v1.ProjectsService/CreateService"
-	ProjectsService_SetServiceOwners_FullMethodName = "/projects.v1.ProjectsService/SetServiceOwners"
+	ProjectsService_GetService_FullMethodName          = "/projects.v1.ProjectsService/GetService"
+	ProjectsService_ListServices_FullMethodName        = "/projects.v1.ProjectsService/ListServices"
+	ProjectsService_CreateService_FullMethodName       = "/projects.v1.ProjectsService/CreateService"
+	ProjectsService_SetServiceOwners_FullMethodName    = "/projects.v1.ProjectsService/SetServiceOwners"
+	ProjectsService_DecommissionService_FullMethodName = "/projects.v1.ProjectsService/DecommissionService"
 )
 
 // ProjectsServiceClient is the client API for ProjectsService service.
@@ -60,6 +61,17 @@ type ProjectsServiceClient interface {
 	// worker'ом. Конфликт версии → FailedPrecondition; отсутствие записи →
 	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
 	SetServiceOwners(ctx context.Context, in *SetServiceOwnersRequest, opts ...grpc.CallOption) (*SetServiceOwnersResponse, error)
+	// DecommissionService выводит активный сервис из эксплуатации (soft delete):
+	// данные каталога СОХРАНЯЮТСЯ, статус переводится guarded-CAS ACTIVE→DECOMMISSIONED,
+	// во внешних системах отзывается доступ (GitLab archive, Harbor read-only, Vault
+	// revoke SecretID) — асинхронно Temporal-workflow «Вывод из эксплуатации» с
+	// детерминированным WorkflowID. Поле load_drained — явное предусловие снятой
+	// нагрузки из K8s (в MVP K8s-worker нет, см. ADR-0012). Семантика идемпотентна:
+	// повторный вызов на уже выведенном сервисе → успех (no-op). Допустимый исходный
+	// статус — только ACTIVE; creating/failed или неснятая нагрузка →
+	// FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
+	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
+	DecommissionService(ctx context.Context, in *DecommissionServiceRequest, opts ...grpc.CallOption) (*DecommissionServiceResponse, error)
 }
 
 type projectsServiceClient struct {
@@ -110,6 +122,16 @@ func (c *projectsServiceClient) SetServiceOwners(ctx context.Context, in *SetSer
 	return out, nil
 }
 
+func (c *projectsServiceClient) DecommissionService(ctx context.Context, in *DecommissionServiceRequest, opts ...grpc.CallOption) (*DecommissionServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecommissionServiceResponse)
+	err := c.cc.Invoke(ctx, ProjectsService_DecommissionService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProjectsServiceServer is the server API for ProjectsService service.
 // All implementations must embed UnimplementedProjectsServiceServer
 // for forward compatibility.
@@ -140,6 +162,17 @@ type ProjectsServiceServer interface {
 	// worker'ом. Конфликт версии → FailedPrecondition; отсутствие записи →
 	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
 	SetServiceOwners(context.Context, *SetServiceOwnersRequest) (*SetServiceOwnersResponse, error)
+	// DecommissionService выводит активный сервис из эксплуатации (soft delete):
+	// данные каталога СОХРАНЯЮТСЯ, статус переводится guarded-CAS ACTIVE→DECOMMISSIONED,
+	// во внешних системах отзывается доступ (GitLab archive, Harbor read-only, Vault
+	// revoke SecretID) — асинхронно Temporal-workflow «Вывод из эксплуатации» с
+	// детерминированным WorkflowID. Поле load_drained — явное предусловие снятой
+	// нагрузки из K8s (в MVP K8s-worker нет, см. ADR-0012). Семантика идемпотентна:
+	// повторный вызов на уже выведенном сервисе → успех (no-op). Допустимый исходный
+	// статус — только ACTIVE; creating/failed или неснятая нагрузка →
+	// FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
+	// NotFound. BREAKING: добавление метода в существующий сервис-контракт.
+	DecommissionService(context.Context, *DecommissionServiceRequest) (*DecommissionServiceResponse, error)
 	mustEmbedUnimplementedProjectsServiceServer()
 }
 
@@ -161,6 +194,9 @@ func (UnimplementedProjectsServiceServer) CreateService(context.Context, *Create
 }
 func (UnimplementedProjectsServiceServer) SetServiceOwners(context.Context, *SetServiceOwnersRequest) (*SetServiceOwnersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetServiceOwners not implemented")
+}
+func (UnimplementedProjectsServiceServer) DecommissionService(context.Context, *DecommissionServiceRequest) (*DecommissionServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DecommissionService not implemented")
 }
 func (UnimplementedProjectsServiceServer) mustEmbedUnimplementedProjectsServiceServer() {}
 func (UnimplementedProjectsServiceServer) testEmbeddedByValue()                         {}
@@ -255,6 +291,24 @@ func _ProjectsService_SetServiceOwners_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProjectsService_DecommissionService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecommissionServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProjectsServiceServer).DecommissionService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProjectsService_DecommissionService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProjectsServiceServer).DecommissionService(ctx, req.(*DecommissionServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProjectsService_ServiceDesc is the grpc.ServiceDesc for ProjectsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -277,6 +331,10 @@ var ProjectsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetServiceOwners",
 			Handler:    _ProjectsService_SetServiceOwners_Handler,
+		},
+		{
+			MethodName: "DecommissionService",
+			Handler:    _ProjectsService_DecommissionService_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

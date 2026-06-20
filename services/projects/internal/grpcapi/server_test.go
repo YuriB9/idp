@@ -35,6 +35,11 @@ type fakeCatalog struct {
 	ownersOut    []string
 	ownersVerOut int64
 	ownersCalled bool
+
+	// поля для DecommissionService
+	decommErr    error
+	decommOut    repository.Service
+	decommCalled bool
 }
 
 func (f *fakeCatalog) Get(context.Context, string, string) (repository.Service, error) {
@@ -53,6 +58,11 @@ func (f *fakeCatalog) CreateService(context.Context, string, string) (repository
 func (f *fakeCatalog) SetServiceOwners(_ context.Context, _, _ string, _ []string, _ int64) ([]string, int64, error) {
 	f.ownersCalled = true
 	return f.ownersOut, f.ownersVerOut, f.ownersErr
+}
+
+func (f *fakeCatalog) DecommissionService(_ context.Context, _, _ string, _ bool) (repository.Service, error) {
+	f.decommCalled = true
+	return f.decommOut, f.decommErr
 }
 
 func discardLogger() *slog.Logger {
@@ -170,10 +180,10 @@ func TestCreateServiceMapping(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
-			name:     "конфликт → FailedPrecondition",
+			name:     "конфликт → Aborted",
 			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
 			fake:     &fakeCatalog{createErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
-			wantCode: codes.FailedPrecondition,
+			wantCode: codes.Aborted,
 		},
 	}
 	for _, tc := range tests {
@@ -291,10 +301,10 @@ func TestSetServiceOwnersMapping(t *testing.T) {
 			wantCode: codes.InvalidArgument,
 		},
 		{
-			name:     "конфликт версии → FailedPrecondition",
+			name:     "конфликт версии → Aborted",
 			req:      &projectsv1.SetServiceOwnersRequest{Project: "p", Name: "n", Owners: []string{"a"}, ExpectedVersion: 1},
 			fake:     &fakeCatalog{ownersErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
-			wantCode: codes.FailedPrecondition,
+			wantCode: codes.Aborted,
 		},
 		{
 			name:     "не найдено → NotFound",
@@ -350,6 +360,102 @@ func TestSetServiceOwnersRBAC(t *testing.T) {
 				t.Fatalf("ожидали PermissionDenied, получили %v", err)
 			}
 			if fake.ownersCalled {
+				t.Fatal("при отказе RBAC доменная операция не должна выполняться")
+			}
+		})
+	}
+}
+
+// TestDecommissionServiceMapping покрывает DecommissionService: успех возвращает
+// итоговое состояние; предусловие → FailedPrecondition, конфликт → Aborted,
+// NotFound → NotFound, валидация → InvalidArgument.
+func TestDecommissionServiceMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		req      *projectsv1.DecommissionServiceRequest
+		fake     *fakeCatalog
+		wantCode codes.Code
+	}{
+		{
+			name:     "успех → DECOMMISSIONED",
+			req:      &projectsv1.DecommissionServiceRequest{Project: "p", Name: "n", LoadDrained: true},
+			fake:     &fakeCatalog{decommOut: repository.Service{Project: "p", Name: "n", Status: repository.StatusDecommissioned}},
+			wantCode: codes.OK,
+		},
+		{
+			name:     "пустой name → InvalidArgument",
+			req:      &projectsv1.DecommissionServiceRequest{Project: "p"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "предусловие → FailedPrecondition",
+			req:      &projectsv1.DecommissionServiceRequest{Project: "p", Name: "n", LoadDrained: false},
+			fake:     &fakeCatalog{decommErr: fmt.Errorf("обёртка: %w", errs.ErrPrecondition)},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "конфликт → Aborted",
+			req:      &projectsv1.DecommissionServiceRequest{Project: "p", Name: "n", LoadDrained: true},
+			fake:     &fakeCatalog{decommErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
+			wantCode: codes.Aborted,
+		},
+		{
+			name:     "не найдено → NotFound",
+			req:      &projectsv1.DecommissionServiceRequest{Project: "p", Name: "n", LoadDrained: true},
+			fake:     &fakeCatalog{decommErr: fmt.Errorf("обёртка: %w", errs.ErrNotFound)},
+			wantCode: codes.NotFound,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := New(tc.fake, allowIDM(), discardLogger())
+			resp, err := srv.DecommissionService(context.Background(), tc.req)
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("неожиданная ошибка: %v", err)
+				}
+				if resp.GetService().GetStatus() != projectsv1.ServiceStatus_SERVICE_STATUS_DECOMMISSIONED {
+					t.Fatalf("статус = %v, ожидали DECOMMISSIONED", resp.GetService().GetStatus())
+				}
+				return
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != tc.wantCode {
+				t.Fatalf("код = %v, ожидали %v", st.Code(), tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestDecommissionServiceRBAC: отказ RBAC и недоступность IDM → PermissionDenied,
+// доменная операция не выполняется.
+func TestDecommissionServiceRBAC(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		idm  stubIDM
+	}{
+		{name: "отказ RBAC", idm: stubIDM{allowed: false}},
+		{name: "IDM недоступен (fail-closed)", idm: stubIDM{err: status.Error(codes.Unavailable, "down")}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := &fakeCatalog{decommOut: repository.Service{Project: "p", Name: "n", Status: repository.StatusDecommissioned}}
+			srv := New(fake, tc.idm, discardLogger())
+			_, err := srv.DecommissionService(context.Background(), &projectsv1.DecommissionServiceRequest{Project: "p", Name: "n", LoadDrained: true})
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.PermissionDenied {
+				t.Fatalf("ожидали PermissionDenied, получили %v", err)
+			}
+			if fake.decommCalled {
 				t.Fatal("при отказе RBAC доменная операция не должна выполняться")
 			}
 		})

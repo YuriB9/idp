@@ -10,13 +10,15 @@ import { apiClient } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/StatusBadge";
 import { OwnersCard } from "@/components/OwnersCard";
+import { DecommissionCard } from "@/components/DecommissionCard";
 
 // POLL_INTERVAL_MS — интервал поллинга статуса (см. design.md, стратегия).
 const POLL_INTERVAL_MS = 1500;
 
 // isTerminal — достигнут ли терминальный статус (опрос пора останавливать).
+// decommissioned также терминален: дальнейший поллинг не нужен.
 function isTerminal(status: string): boolean {
-  return status === "active" || status === "failed";
+  return status === "active" || status === "failed" || status === "decommissioned";
 }
 
 // apiGetService — обёртка над клиентом периметра для чтения статуса.
@@ -92,7 +94,13 @@ export function ServiceProgressPage() {
               </span>
             )}
             {status === "decommissioned" && (
-              <span className="text-muted-foreground">Сервис выведен из эксплуатации.</span>
+              <span className="text-muted-foreground">
+                Сервис выведен из эксплуатации
+                {query.data?.decommissioned_at
+                  ? ` (${query.data.decommissioned_at})`
+                  : ""}
+                . Данные каталога сохранены.
+              </span>
             )}
           </div>
         </CardContent>
@@ -107,6 +115,12 @@ export function ServiceProgressPage() {
           owners={query.data.owners}
           ownersVersion={query.data.owners_version}
         />
+      )}
+
+      {/* Вывод сервиса из эксплуатации (soft delete): действие с подтверждением,
+          доступно только для активного сервиса (требует права decommission). */}
+      {query.data && (
+        <DecommissionCard project={project} name={name} status={query.data.status} />
       )}
     </section>
   );

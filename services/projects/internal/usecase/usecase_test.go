@@ -51,6 +51,10 @@ type fakeStarter struct {
 	gotDesired     []string
 	gotPrevious    []string
 	gotExpectedVer int64
+
+	// поля для StartDecommission
+	decommCalled   bool
+	gotLoadDrained bool
 }
 
 func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string) error {
@@ -64,6 +68,67 @@ func (f *fakeStarter) StartChangeOwners(_ context.Context, serviceID, project, n
 	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
 	f.gotDesired, f.gotPrevious, f.gotExpectedVer = desired, previous, expectedVersion
 	return f.err
+}
+
+func (f *fakeStarter) StartDecommission(_ context.Context, serviceID, project, name string, loadDrained bool) error {
+	f.decommCalled = true
+	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
+	f.gotLoadDrained = loadDrained
+	return f.err
+}
+
+// TestDecommissionService покрывает вывод из эксплуатации: запуск workflow для
+// активного сервиса со снятой нагрузкой, идемпотентный no-op для уже выведенного,
+// отказ-предусловие для недопустимого статуса и неснятой нагрузки, NotFound.
+func TestDecommissionService(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		seedStatus  *repository.Status // nil — не сеять (NotFound)
+		loadDrained bool
+		wantStart   bool
+		wantErr     error
+	}{
+		{name: "active+drained → запуск", seedStatus: ptr(repository.StatusActive), loadDrained: true, wantStart: true},
+		{name: "уже decommissioned → no-op", seedStatus: ptr(repository.StatusDecommissioned), loadDrained: true},
+		{name: "creating → предусловие", seedStatus: ptr(repository.StatusCreating), loadDrained: true, wantErr: errs.ErrPrecondition},
+		{name: "failed → предусловие", seedStatus: ptr(repository.StatusFailed), loadDrained: true, wantErr: errs.ErrPrecondition},
+		{name: "active без снятой нагрузки → предусловие", seedStatus: ptr(repository.StatusActive), loadDrained: false, wantErr: errs.ErrPrecondition},
+		{name: "отсутствует → NotFound", seedStatus: nil, loadDrained: true, wantErr: errs.ErrNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMemStore()
+			ctx := context.Background()
+			if tc.seedStatus != nil {
+				if err := store.Create(ctx, repository.Service{ID: uuid.New(), Project: "p", Name: "n", Status: *tc.seedStatus}); err != nil {
+					t.Fatalf("посев: %v", err)
+				}
+			}
+			starter := &fakeStarter{}
+			uc := usecase.New(store, usecase.WithStarter(starter))
+
+			_, err := uc.DecommissionService(ctx, "p", "n", tc.loadDrained)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("ожидали %v, получили %v", tc.wantErr, err)
+				}
+				if starter.decommCalled {
+					t.Fatal("workflow не должен стартовать при ошибке")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("неожиданная ошибка: %v", err)
+			}
+			if starter.decommCalled != tc.wantStart {
+				t.Fatalf("decommCalled=%v, ожидали %v", starter.decommCalled, tc.wantStart)
+			}
+		})
+	}
 }
 
 // TestCreateService_StartsWorkflowAfterInsert: запись фиксируется со статусом

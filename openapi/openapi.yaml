@@ -93,6 +93,45 @@ paths:
                 $ref: "#/components/schemas/ServiceSummary"
         "404":
           $ref: "#/components/responses/NotFound"
+  /projects/{project}/services/{name}/decommission:
+    post:
+      operationId: decommissionService
+      summary: Вывод сервиса из эксплуатации (soft delete)
+      description: >
+        Выводит активный сервис из эксплуатации (soft delete): данные каталога
+        сохраняются, статус переводится в decommissioned, во внешних системах
+        отзывается доступ (GitLab archive, Harbor read-only, Vault revoke).
+        Тело несёт явное предусловие load_drained (нагрузка снята из K8s, ADR-0012).
+        Идемпотентно: повтор на уже выведенном сервисе → 200. Допустим только
+        исходный статус active; предусловие не выполнено (нагрузка не снята или
+        статус creating/failed) → 422; конкурентная смена статуса → 409; отсутствие
+        сервиса → 404; отказ RBAC (право decommission) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecommissionServiceRequest"
+      responses:
+        "200":
+          description: Вывод из эксплуатации запущен (или сервис уже выведен)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
   /projects/{project}/services/{name}/owners:
     put:
       operationId: setServiceOwners
@@ -169,6 +208,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    PreconditionFailed:
+      description: >
+        Предусловие операции не выполнено (например, нагрузка не снята из K8s или
+        недопустимый исходный статус сервиса).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthStatus:
       type: object
@@ -200,6 +247,11 @@ components:
           type: integer
           format: int64
           description: Версия набора владельцев для optimistic-concurrency.
+        decommissioned_at:
+          type: string
+          description: >
+            Момент вывода сервиса из эксплуатации (RFC3339); отсутствует/пусто,
+            если сервис не выведен (ADR-0012).
     ServiceList:
       type: object
       required: [services, next_page_token]
@@ -257,6 +309,16 @@ components:
           type: integer
           format: int64
           description: Новая версия набора владельцев.
+    DecommissionServiceRequest:
+      type: object
+      required: [load_drained]
+      properties:
+        load_drained:
+          type: boolean
+          description: >
+            Явное предусловие: нагрузка сервиса снята из K8s. В MVP K8s-worker
+            отсутствует, поэтому снятие подтверждается клиентом (ADR-0012).
+            false → 422 до любых побочных эффектов.
     Error:
       type: object
       required: [error]

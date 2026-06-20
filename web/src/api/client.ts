@@ -15,6 +15,7 @@ const ServiceSummary = z
     status: ServiceStatus,
     owners: z.array(z.string()),
     owners_version: z.number().int(),
+    decommissioned_at: z.string().optional(),
   })
   .passthrough();
 const ServiceList = z
@@ -26,6 +27,9 @@ const CreateServiceRequest = z
   .passthrough();
 const CreateServiceResult = z
   .object({ id: z.string(), status: ServiceStatus })
+  .passthrough();
+const DecommissionServiceRequest = z
+  .object({ load_drained: z.boolean() })
   .passthrough();
 const SetServiceOwnersRequest = z
   .object({
@@ -45,6 +49,7 @@ export const schemas = {
   Error,
   CreateServiceRequest,
   CreateServiceResult,
+  DecommissionServiceRequest,
   SetServiceOwnersRequest,
   SetServiceOwnersResult,
 };
@@ -141,6 +146,60 @@ const endpoints = makeApi([
       {
         status: 404,
         description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/projects/:project/services/:name/decommission",
+    alias: "decommissionService",
+    description: `Выводит активный сервис из эксплуатации (soft delete): данные каталога сохраняются, статус переводится в decommissioned, во внешних системах отзывается доступ (GitLab archive, Harbor read-only, Vault revoke). Тело несёт явное предусловие load_drained (нагрузка снята из K8s, ADR-0012). Идемпотентно: повтор на уже выведенном сервисе → 200. Допустим только исходный статус active; предусловие не выполнено (нагрузка не снята или статус creating/failed) → 422; конкурентная смена статуса → 409; отсутствие сервиса → 404; отказ RBAC (право decommission) → 403.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ load_drained: z.boolean() }).passthrough(),
+      },
+      {
+        name: "project",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: ServiceSummary,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 409,
+        description: `Конфликт состояния (например, имя сервиса уже занято)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],

@@ -27,6 +27,7 @@ type Catalog interface {
 	List(ctx context.Context, project string, pageSize int, pageToken string) ([]repository.Service, string, error)
 	CreateService(ctx context.Context, project, name string) (repository.Service, error)
 	SetServiceOwners(ctx context.Context, project, name string, owners []string, expectedVersion int64) ([]string, int64, error)
+	DecommissionService(ctx context.Context, project, name string, loadDrained bool) (repository.Service, error)
 }
 
 // AccessChecker — зависимость от IDM (RBAC CheckAccess). Совместима с
@@ -62,11 +63,12 @@ func (s *Server) GetService(ctx context.Context, req *projectsv1.GetServiceReque
 		return nil, s.mapError(ctx, "GetService", err)
 	}
 	return &projectsv1.GetServiceResponse{
-		Project:       svc.Project,
-		Name:          svc.Name,
-		Status:        st,
-		Owners:        svc.Owners,
-		OwnersVersion: svc.OwnersVersion,
+		Project:          svc.Project,
+		Name:             svc.Name,
+		Status:           st,
+		Owners:           svc.Owners,
+		OwnersVersion:    svc.OwnersVersion,
+		DecommissionedAt: decommissionedAtToProto(svc.DecommissionedAt),
 	}, nil
 }
 
@@ -139,6 +141,32 @@ func (s *Server) SetServiceOwners(ctx context.Context, req *projectsv1.SetServic
 	return &projectsv1.SetServiceOwnersResponse{Owners: owners, OwnersVersion: version}, nil
 }
 
+// DecommissionService выводит сервис из эксплуатации (soft-delete): валидирует
+// запрос, проверяет право decommission (fail-closed) и запускает workflow «Вывод
+// из эксплуатации». Идемпотентно: уже выведенный сервис → успех (no-op). Недопустимый
+// исходный статус или неснятая нагрузка → FailedPrecondition; конкурентная смена
+// статуса → Aborted; отсутствие записи → NotFound. Внутренние детали наружу не
+// раскрываются.
+func (s *Server) DecommissionService(ctx context.Context, req *projectsv1.DecommissionServiceRequest) (*projectsv1.DecommissionServiceResponse, error) {
+	if req.GetProject() == "" || req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "project и name обязательны")
+	}
+	// RBAC (defense-in-depth): право decommission до доменной операции и запуска
+	// workflow.
+	if err := s.authorize(ctx, req.GetProject(), "decommission"); err != nil {
+		return nil, err
+	}
+	svc, err := s.catalog.DecommissionService(ctx, req.GetProject(), req.GetName(), req.GetLoadDrained())
+	if err != nil {
+		return nil, s.mapError(ctx, "DecommissionService", err)
+	}
+	p, perr := serviceToProto(svc)
+	if perr != nil {
+		return nil, s.mapError(ctx, "DecommissionService", perr)
+	}
+	return &projectsv1.DecommissionServiceResponse{Service: p}, nil
+}
+
 // authorize проверяет право субъекта на действие над проектом через IDM
 // CheckAccess. subject берётся из claims (auth.ClaimsFromContext). Отказ ИЛИ
 // недоступность/ошибка IDM → PermissionDenied (fail-closed); внутренние детали
@@ -170,7 +198,12 @@ func (s *Server) mapError(_ context.Context, method string, err error) error {
 	case errors.Is(err, errs.ErrNotFound):
 		return status.Error(codes.NotFound, "сервис не найден")
 	case errors.Is(err, errs.ErrConflict):
-		return status.Error(codes.FailedPrecondition, "конфликт состояния")
+		// Конкурентный конфликт guarded-CAS (gRPC-каноничный Aborted → HTTP 409,
+		// ADR-0012). Сюда же относится конфликт версии владельцев.
+		return status.Error(codes.Aborted, "конфликт состояния")
+	case errors.Is(err, errs.ErrPrecondition):
+		// Семантическое предусловие не выполнено (FailedPrecondition → HTTP 422).
+		return status.Error(codes.FailedPrecondition, "предусловие не выполнено")
 	case errors.Is(err, errs.ErrValidation):
 		return status.Error(codes.InvalidArgument, "некорректный запрос")
 	default:

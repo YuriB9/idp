@@ -20,17 +20,26 @@ type Memory struct {
 	members map[string]map[string]bool
 	// vaultOwners — субъекты с доступом по политике Vault по ключу сервиса.
 	vaultOwners map[string]map[string]bool
+	// archived — флаг архивации репозитория GitLab (вывод из эксплуатации).
+	archived map[string]bool
+	// harborReadOnly — флаг режима read-only директории Harbor (вывод из эксплуатации).
+	harborReadOnly map[string]bool
+	// vaultRevoked — флаг отзыва активных SecretID/токенов Vault (вывод из эксплуатации).
+	vaultRevoked map[string]bool
 }
 
 // NewMemory создаёт пустой in-memory набор клиентов.
 func NewMemory() *Memory {
 	return &Memory{
-		repos:       map[string]bool{},
-		harbor:      map[string]bool{},
-		vault:       map[string]bool{},
-		variables:   map[string]map[string]string{},
-		members:     map[string]map[string]bool{},
-		vaultOwners: map[string]map[string]bool{},
+		repos:          map[string]bool{},
+		harbor:         map[string]bool{},
+		vault:          map[string]bool{},
+		variables:      map[string]map[string]string{},
+		members:        map[string]map[string]bool{},
+		vaultOwners:    map[string]map[string]bool{},
+		archived:       map[string]bool{},
+		harborReadOnly: map[string]bool{},
+		vaultRevoked:   map[string]bool{},
 	}
 }
 
@@ -95,6 +104,20 @@ func (m *Memory) RestoreMembers(_ context.Context, ref provisioning.ResourceRef,
 	return nil
 }
 
+func (m *Memory) Archive(_ context.Context, ref provisioning.ResourceRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.archived[key(ref)] = true // идемпотентно: повторная архивация — no-op
+	return nil
+}
+
+func (m *Memory) Unarchive(_ context.Context, ref provisioning.ResourceRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.archived, key(ref)) // идемпотентно: компенсация
+	return nil
+}
+
 func (m *Memory) InjectVariables(_ context.Context, in provisioning.InjectSecretsInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,6 +149,20 @@ func (m *Memory) DeleteProject(_ context.Context, ref provisioning.ResourceRef) 
 	return nil
 }
 
+func (m *Memory) SetReadOnly(_ context.Context, ref provisioning.ResourceRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.harborReadOnly[key(ref)] = true // идемпотентно
+	return nil
+}
+
+func (m *Memory) SetWritable(_ context.Context, ref provisioning.ResourceRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.harborReadOnly, key(ref)) // идемпотентно: компенсация
+	return nil
+}
+
 // --- Vault ---
 
 func (m *Memory) SetupAppRole(_ context.Context, ref provisioning.ResourceRef) (provisioning.VaultResult, error) {
@@ -153,6 +190,13 @@ func (m *Memory) RestoreOwners(_ context.Context, ref provisioning.ResourceRef, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	replaceSet(m.vaultOwners, key(ref), previous)
+	return nil
+}
+
+func (m *Memory) RevokeSecretID(_ context.Context, ref provisioning.ResourceRef) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vaultRevoked[key(ref)] = true // идемпотентно; необратимо (компенсации нет)
 	return nil
 }
 
@@ -191,4 +235,25 @@ func (m *Memory) HasVaultOwner(ref provisioning.ResourceRef, subject string) boo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.vaultOwners[key(ref)][subject]
+}
+
+// IsArchived сообщает, архивирован ли репозиторий GitLab для ref.
+func (m *Memory) IsArchived(ref provisioning.ResourceRef) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.archived[key(ref)]
+}
+
+// IsHarborReadOnly сообщает, переведена ли директория Harbor в read-only для ref.
+func (m *Memory) IsHarborReadOnly(ref provisioning.ResourceRef) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.harborReadOnly[key(ref)]
+}
+
+// IsVaultRevoked сообщает, отозваны ли активные SecretID/токены Vault для ref.
+func (m *Memory) IsVaultRevoked(ref provisioning.ResourceRef) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.vaultRevoked[key(ref)]
 }

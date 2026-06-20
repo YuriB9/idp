@@ -96,8 +96,11 @@ type Service struct {
 	Owners []string `protobuf:"bytes,4,rep,name=owners,proto3" json:"owners,omitempty"`
 	// owners_version — версия набора владельцев для optimistic-concurrency.
 	OwnersVersion int64 `protobuf:"varint,5,opt,name=owners_version,json=ownersVersion,proto3" json:"owners_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// decommissioned_at — момент вывода сервиса из эксплуатации (RFC3339); пусто,
+	// если сервис не выведен. Аддитивное поле (ADR-0012).
+	DecommissionedAt string `protobuf:"bytes,6,opt,name=decommissioned_at,json=decommissionedAt,proto3" json:"decommissioned_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Service) Reset() {
@@ -165,6 +168,13 @@ func (x *Service) GetOwnersVersion() int64 {
 	return 0
 }
 
+func (x *Service) GetDecommissionedAt() string {
+	if x != nil {
+		return x.DecommissionedAt
+	}
+	return ""
+}
+
 type GetServiceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// project — идентификатор проекта.
@@ -228,8 +238,11 @@ type GetServiceResponse struct {
 	Owners []string `protobuf:"bytes,4,rep,name=owners,proto3" json:"owners,omitempty"`
 	// owners_version — версия набора владельцев для optimistic-concurrency.
 	OwnersVersion int64 `protobuf:"varint,5,opt,name=owners_version,json=ownersVersion,proto3" json:"owners_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// decommissioned_at — момент вывода сервиса из эксплуатации (RFC3339); пусто,
+	// если сервис не выведен. Аддитивное поле (ADR-0012).
+	DecommissionedAt string `protobuf:"bytes,6,opt,name=decommissioned_at,json=decommissionedAt,proto3" json:"decommissioned_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetServiceResponse) Reset() {
@@ -295,6 +308,13 @@ func (x *GetServiceResponse) GetOwnersVersion() int64 {
 		return x.OwnersVersion
 	}
 	return 0
+}
+
+func (x *GetServiceResponse) GetDecommissionedAt() string {
+	if x != nil {
+		return x.DecommissionedAt
+	}
+	return ""
 }
 
 type ListServicesRequest struct {
@@ -651,26 +671,138 @@ func (x *SetServiceOwnersResponse) GetOwnersVersion() int64 {
 	return 0
 }
 
+type DecommissionServiceRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project — идентификатор проекта-владельца.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// name — имя выводимого из эксплуатации сервиса.
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// load_drained — явное предусловие: нагрузка сервиса снята из K8s. В MVP
+	// K8s-worker отсутствует, поэтому снятие нагрузки подтверждается вызывающей
+	// стороной (ADR-0012). false → FailedPrecondition до любых побочных эффектов.
+	LoadDrained   bool `protobuf:"varint,3,opt,name=load_drained,json=loadDrained,proto3" json:"load_drained,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecommissionServiceRequest) Reset() {
+	*x = DecommissionServiceRequest{}
+	mi := &file_projects_v1_projects_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecommissionServiceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecommissionServiceRequest) ProtoMessage() {}
+
+func (x *DecommissionServiceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecommissionServiceRequest.ProtoReflect.Descriptor instead.
+func (*DecommissionServiceRequest) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DecommissionServiceRequest) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *DecommissionServiceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DecommissionServiceRequest) GetLoadDrained() bool {
+	if x != nil {
+		return x.LoadDrained
+	}
+	return false
+}
+
+type DecommissionServiceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// service — итоговое состояние записи (status=DECOMMISSIONED, decommissioned_at).
+	Service       *Service `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecommissionServiceResponse) Reset() {
+	*x = DecommissionServiceResponse{}
+	mi := &file_projects_v1_projects_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecommissionServiceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecommissionServiceResponse) ProtoMessage() {}
+
+func (x *DecommissionServiceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_projects_v1_projects_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecommissionServiceResponse.ProtoReflect.Descriptor instead.
+func (*DecommissionServiceResponse) Descriptor() ([]byte, []int) {
+	return file_projects_v1_projects_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *DecommissionServiceResponse) GetService() *Service {
+	if x != nil {
+		return x.Service
+	}
+	return nil
+}
+
 var File_projects_v1_projects_proto protoreflect.FileDescriptor
 
 const file_projects_v1_projects_proto_rawDesc = "" +
 	"\n" +
-	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"\xaa\x01\n" +
+	"\x1aprojects/v1/projects.proto\x12\vprojects.v1\"\xd7\x01\n" +
 	"\aService\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\x12\x16\n" +
 	"\x06owners\x18\x04 \x03(\tR\x06owners\x12%\n" +
-	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\"A\n" +
+	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\x12+\n" +
+	"\x11decommissioned_at\x18\x06 \x01(\tR\x10decommissionedAt\"A\n" +
 	"\x11GetServiceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xb5\x01\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xe2\x01\n" +
 	"\x12GetServiceResponse\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\x12\x16\n" +
 	"\x06owners\x18\x04 \x03(\tR\x06owners\x12%\n" +
-	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\"k\n" +
+	"\x0eowners_version\x18\x05 \x01(\x03R\rownersVersion\x12+\n" +
+	"\x11decommissioned_at\x18\x06 \x01(\tR\x10decommissionedAt\"k\n" +
 	"\x13ListServicesRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -692,19 +824,26 @@ const file_projects_v1_projects_proto_rawDesc = "" +
 	"\x10expected_version\x18\x04 \x01(\x03R\x0fexpectedVersion\"Y\n" +
 	"\x18SetServiceOwnersResponse\x12\x16\n" +
 	"\x06owners\x18\x01 \x03(\tR\x06owners\x12%\n" +
-	"\x0eowners_version\x18\x02 \x01(\x03R\rownersVersion*\xa5\x01\n" +
+	"\x0eowners_version\x18\x02 \x01(\x03R\rownersVersion\"m\n" +
+	"\x1aDecommissionServiceRequest\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +
+	"\fload_drained\x18\x03 \x01(\bR\vloadDrained\"M\n" +
+	"\x1bDecommissionServiceResponse\x12.\n" +
+	"\aservice\x18\x01 \x01(\v2\x14.projects.v1.ServiceR\aservice*\xa5\x01\n" +
 	"\rServiceStatus\x12\x1e\n" +
 	"\x1aSERVICE_STATUS_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17SERVICE_STATUS_CREATING\x10\x01\x12\x19\n" +
 	"\x15SERVICE_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSERVICE_STATUS_DECOMMISSIONED\x10\x03\x12\x19\n" +
-	"\x15SERVICE_STATUS_FAILED\x10\x042\xee\x02\n" +
+	"\x15SERVICE_STATUS_FAILED\x10\x042\xd8\x03\n" +
 	"\x0fProjectsService\x12M\n" +
 	"\n" +
 	"GetService\x12\x1e.projects.v1.GetServiceRequest\x1a\x1f.projects.v1.GetServiceResponse\x12S\n" +
 	"\fListServices\x12 .projects.v1.ListServicesRequest\x1a!.projects.v1.ListServicesResponse\x12V\n" +
 	"\rCreateService\x12!.projects.v1.CreateServiceRequest\x1a\".projects.v1.CreateServiceResponse\x12_\n" +
-	"\x10SetServiceOwners\x12$.projects.v1.SetServiceOwnersRequest\x1a%.projects.v1.SetServiceOwnersResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
+	"\x10SetServiceOwners\x12$.projects.v1.SetServiceOwnersRequest\x1a%.projects.v1.SetServiceOwnersResponse\x12h\n" +
+	"\x13DecommissionService\x12'.projects.v1.DecommissionServiceRequest\x1a(.projects.v1.DecommissionServiceResponseB6Z4github.com/YuriB9/idp/pkg/api/projects/v1;projectsv1b\x06proto3"
 
 var (
 	file_projects_v1_projects_proto_rawDescOnce sync.Once
@@ -719,37 +858,42 @@ func file_projects_v1_projects_proto_rawDescGZIP() []byte {
 }
 
 var file_projects_v1_projects_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_projects_v1_projects_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_projects_v1_projects_proto_goTypes = []any{
-	(ServiceStatus)(0),               // 0: projects.v1.ServiceStatus
-	(*Service)(nil),                  // 1: projects.v1.Service
-	(*GetServiceRequest)(nil),        // 2: projects.v1.GetServiceRequest
-	(*GetServiceResponse)(nil),       // 3: projects.v1.GetServiceResponse
-	(*ListServicesRequest)(nil),      // 4: projects.v1.ListServicesRequest
-	(*ListServicesResponse)(nil),     // 5: projects.v1.ListServicesResponse
-	(*CreateServiceRequest)(nil),     // 6: projects.v1.CreateServiceRequest
-	(*CreateServiceResponse)(nil),    // 7: projects.v1.CreateServiceResponse
-	(*SetServiceOwnersRequest)(nil),  // 8: projects.v1.SetServiceOwnersRequest
-	(*SetServiceOwnersResponse)(nil), // 9: projects.v1.SetServiceOwnersResponse
+	(ServiceStatus)(0),                  // 0: projects.v1.ServiceStatus
+	(*Service)(nil),                     // 1: projects.v1.Service
+	(*GetServiceRequest)(nil),           // 2: projects.v1.GetServiceRequest
+	(*GetServiceResponse)(nil),          // 3: projects.v1.GetServiceResponse
+	(*ListServicesRequest)(nil),         // 4: projects.v1.ListServicesRequest
+	(*ListServicesResponse)(nil),        // 5: projects.v1.ListServicesResponse
+	(*CreateServiceRequest)(nil),        // 6: projects.v1.CreateServiceRequest
+	(*CreateServiceResponse)(nil),       // 7: projects.v1.CreateServiceResponse
+	(*SetServiceOwnersRequest)(nil),     // 8: projects.v1.SetServiceOwnersRequest
+	(*SetServiceOwnersResponse)(nil),    // 9: projects.v1.SetServiceOwnersResponse
+	(*DecommissionServiceRequest)(nil),  // 10: projects.v1.DecommissionServiceRequest
+	(*DecommissionServiceResponse)(nil), // 11: projects.v1.DecommissionServiceResponse
 }
 var file_projects_v1_projects_proto_depIdxs = []int32{
-	0, // 0: projects.v1.Service.status:type_name -> projects.v1.ServiceStatus
-	0, // 1: projects.v1.GetServiceResponse.status:type_name -> projects.v1.ServiceStatus
-	1, // 2: projects.v1.ListServicesResponse.services:type_name -> projects.v1.Service
-	0, // 3: projects.v1.CreateServiceResponse.status:type_name -> projects.v1.ServiceStatus
-	2, // 4: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
-	4, // 5: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
-	6, // 6: projects.v1.ProjectsService.CreateService:input_type -> projects.v1.CreateServiceRequest
-	8, // 7: projects.v1.ProjectsService.SetServiceOwners:input_type -> projects.v1.SetServiceOwnersRequest
-	3, // 8: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
-	5, // 9: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
-	7, // 10: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
-	9, // 11: projects.v1.ProjectsService.SetServiceOwners:output_type -> projects.v1.SetServiceOwnersResponse
-	8, // [8:12] is the sub-list for method output_type
-	4, // [4:8] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0,  // 0: projects.v1.Service.status:type_name -> projects.v1.ServiceStatus
+	0,  // 1: projects.v1.GetServiceResponse.status:type_name -> projects.v1.ServiceStatus
+	1,  // 2: projects.v1.ListServicesResponse.services:type_name -> projects.v1.Service
+	0,  // 3: projects.v1.CreateServiceResponse.status:type_name -> projects.v1.ServiceStatus
+	1,  // 4: projects.v1.DecommissionServiceResponse.service:type_name -> projects.v1.Service
+	2,  // 5: projects.v1.ProjectsService.GetService:input_type -> projects.v1.GetServiceRequest
+	4,  // 6: projects.v1.ProjectsService.ListServices:input_type -> projects.v1.ListServicesRequest
+	6,  // 7: projects.v1.ProjectsService.CreateService:input_type -> projects.v1.CreateServiceRequest
+	8,  // 8: projects.v1.ProjectsService.SetServiceOwners:input_type -> projects.v1.SetServiceOwnersRequest
+	10, // 9: projects.v1.ProjectsService.DecommissionService:input_type -> projects.v1.DecommissionServiceRequest
+	3,  // 10: projects.v1.ProjectsService.GetService:output_type -> projects.v1.GetServiceResponse
+	5,  // 11: projects.v1.ProjectsService.ListServices:output_type -> projects.v1.ListServicesResponse
+	7,  // 12: projects.v1.ProjectsService.CreateService:output_type -> projects.v1.CreateServiceResponse
+	9,  // 13: projects.v1.ProjectsService.SetServiceOwners:output_type -> projects.v1.SetServiceOwnersResponse
+	11, // 14: projects.v1.ProjectsService.DecommissionService:output_type -> projects.v1.DecommissionServiceResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_projects_v1_projects_proto_init() }
@@ -763,7 +907,7 @@ func file_projects_v1_projects_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_projects_v1_projects_proto_rawDesc), len(file_projects_v1_projects_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

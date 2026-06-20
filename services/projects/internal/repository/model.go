@@ -50,4 +50,7 @@ type Service struct {
 	// OwnersVersion — версия набора владельцев для optimistic-concurrency
 	// (guarded-CAS при смене состава, docs/adr/0011).
 	OwnersVersion int64
+	// DecommissionedAt — момент вывода сервиса из эксплуатации (soft-delete,
+	// ADR-0012); nil для не выведенных сервисов.
+	DecommissionedAt *time.Time
 }

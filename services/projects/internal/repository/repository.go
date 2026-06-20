@@ -65,6 +65,15 @@ func (r *Repo) List(ctx context.Context, project string, pageSize int, pageToken
 	return listServices(ctx, r.pool, project, pageSize, pageToken)
 }
 
+// Decommission выполняет soft-delete: guarded-CAS перевод ACTIVE→DECOMMISSIONED с
+// проставлением decommissioned_at (данные сохраняются). Идемпотентен: повтор на
+// уже выведенном сервисе → успех (возвращается текущая запись). Недопустимый
+// исходный статус (creating/failed) → errs.ErrPrecondition; конкурентная смена
+// статуса → errs.ErrConflict; отсутствие записи → errs.ErrNotFound.
+func (r *Repo) Decommission(ctx context.Context, id uuid.UUID) (Service, error) {
+	return decommission(ctx, r.pool, id)
+}
+
 // SetOwners декларативно заменяет набор владельцев сервиса в одной транзакции:
 // вычисляет diff против текущего состояния, применяет DELETE/INSERT и
 // guarded-CAS инкрементит owners_version (docs/adr/0011). expected — ожидаемая
@@ -156,7 +165,7 @@ func insertService(ctx context.Context, q Querier, s Service) error {
 
 func getByName(ctx context.Context, q Querier, project, name string) (Service, error) {
 	const query = `
-		SELECT id, project, name, status, created_at, updated_at, owners_version
+		SELECT id, project, name, status, created_at, updated_at, owners_version, decommissioned_at
 		FROM services
 		WHERE project = $1 AND name = $2`
 	s, err := scanService(q.QueryRow(ctx, query, project, name))
@@ -222,6 +231,76 @@ func transition(ctx context.Context, q Querier, id uuid.UUID, expected, next Sta
 		return fmt.Errorf("repository: guarded-CAS проигран (id=%s, ожидался %s): %w", id, expected, errs.ErrConflict)
 	}
 	return nil
+}
+
+// decommission — soft-delete через guarded-CAS ACTIVE→DECOMMISSIONED (docs/adr/0012):
+// UPDATE ... WHERE id=$id AND status='active', проставление decommissioned_at.
+// Это НЕ check-then-act: при RowsAffected==0 текущий статус перечитывается лишь
+// для различения идемпотентного повтора (decommissioned → успех), недопустимого
+// предусловия (creating/failed → ErrPrecondition), конкурентного конфликта
+// (ErrConflict) и отсутствия записи (ErrNotFound). Данные сохраняются.
+func decommission(ctx context.Context, q Querier, id uuid.UUID) (Service, error) {
+	const query = `
+		UPDATE services
+		SET status = $2, decommissioned_at = now(), updated_at = now()
+		WHERE id = $1 AND status = $3`
+	tag, err := q.Exec(ctx, query, id, string(StatusDecommissioned), string(StatusActive))
+	if err != nil {
+		return Service{}, fmt.Errorf("repository: decommission: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Текущая запись для различения no-op/предусловия/конфликта/отсутствия.
+		cur, gerr := getByIDStatus(ctx, q, id)
+		if gerr != nil {
+			return Service{}, gerr
+		}
+		switch cur.Status {
+		case StatusDecommissioned:
+			// Идемпотентный повтор: целевое состояние уже достигнуто.
+			return getByID(ctx, q, id)
+		case StatusCreating, StatusFailed:
+			return Service{}, fmt.Errorf("repository: недопустимый исходный статус %q: %w", cur.Status, errs.ErrPrecondition)
+		default:
+			return Service{}, fmt.Errorf("repository: конкурентная смена статуса (id=%s): %w", id, errs.ErrConflict)
+		}
+	}
+	return getByID(ctx, q, id)
+}
+
+// getByIDStatus читает только статус записи по id (для разбора guarded-CAS).
+// Отсутствие → errs.ErrNotFound.
+func getByIDStatus(ctx context.Context, q Querier, id uuid.UUID) (Service, error) {
+	var rawStatus string
+	if err := q.QueryRow(ctx, `SELECT status FROM services WHERE id = $1`, id).Scan(&rawStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Service{}, fmt.Errorf("repository: сервис не найден: %w", errs.ErrNotFound)
+		}
+		return Service{}, fmt.Errorf("repository: чтение статуса: %w", err)
+	}
+	st, err := ParseStatus(rawStatus)
+	if err != nil {
+		return Service{}, err
+	}
+	return Service{ID: id, Status: st}, nil
+}
+
+// getByID читает полную запись каталога (с владельцами) по id. Отсутствие →
+// errs.ErrNotFound.
+func getByID(ctx context.Context, q Querier, id uuid.UUID) (Service, error) {
+	const query = `
+		SELECT id, project, name, status, created_at, updated_at, owners_version, decommissioned_at
+		FROM services
+		WHERE id = $1`
+	s, err := scanService(q.QueryRow(ctx, query, id))
+	if err != nil {
+		return Service{}, err
+	}
+	owners, err := loadOwners(ctx, q, []uuid.UUID{s.ID})
+	if err != nil {
+		return Service{}, err
+	}
+	s.Owners = owners[s.ID]
+	return s, nil
 }
 
 // setOwners выполняет замену набора владельцев поверх Querier (внутри транзакции).
@@ -296,7 +375,7 @@ func listServices(ctx context.Context, q Querier, project string, pageSize int, 
 	)
 	if pageToken == "" {
 		const query = `
-			SELECT id, project, name, status, created_at, updated_at, owners_version
+			SELECT id, project, name, status, created_at, updated_at, owners_version, decommissioned_at
 			FROM services
 			WHERE project = $1
 			ORDER BY created_at, id
@@ -309,7 +388,7 @@ func listServices(ctx context.Context, q Querier, project string, pageSize int, 
 			return nil, "", fmt.Errorf("%w: %v", errs.ErrValidation, derr)
 		}
 		const query = `
-			SELECT id, project, name, status, created_at, updated_at, owners_version
+			SELECT id, project, name, status, created_at, updated_at, owners_version, decommissioned_at
 			FROM services
 			WHERE project = $1 AND (created_at, id) > ($2, $3)
 			ORDER BY created_at, id
@@ -384,7 +463,7 @@ func scanService(row rowScanner) (Service, error) {
 		s         Service
 		rawStatus string
 	)
-	if err := row.Scan(&s.ID, &s.Project, &s.Name, &rawStatus, &s.CreatedAt, &s.UpdatedAt, &s.OwnersVersion); err != nil {
+	if err := row.Scan(&s.ID, &s.Project, &s.Name, &rawStatus, &s.CreatedAt, &s.UpdatedAt, &s.OwnersVersion, &s.DecommissionedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Service{}, fmt.Errorf("repository: сервис не найден: %w", errs.ErrNotFound)
 		}

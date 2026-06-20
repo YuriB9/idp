@@ -29,12 +29,14 @@ type stubProjectsClient struct {
 	listResp   *projectsv1.ListServicesResponse
 	createResp *projectsv1.CreateServiceResponse
 	ownersResp *projectsv1.SetServiceOwnersResponse
+	decommResp *projectsv1.DecommissionServiceResponse
 	err        error
 
 	// gotCreate фиксирует аргументы последнего CreateService для проверок.
 	gotCreate *projectsv1.CreateServiceRequest
 	gotList   *projectsv1.ListServicesRequest
 	gotOwners *projectsv1.SetServiceOwnersRequest
+	gotDecomm *projectsv1.DecommissionServiceRequest
 }
 
 func (s *stubProjectsClient) GetService(_ context.Context, _ *projectsv1.GetServiceRequest, _ ...grpc.CallOption) (*projectsv1.GetServiceResponse, error) {
@@ -66,6 +68,14 @@ func (s *stubProjectsClient) SetServiceOwners(_ context.Context, in *projectsv1.
 		return nil, s.err
 	}
 	return s.ownersResp, nil
+}
+
+func (s *stubProjectsClient) DecommissionService(_ context.Context, in *projectsv1.DecommissionServiceRequest, _ ...grpc.CallOption) (*projectsv1.DecommissionServiceResponse, error) {
+	s.gotDecomm = in
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.decommResp, nil
 }
 
 // stubIDMClient — стаб gRPC-клиента IDM: возвращает заранее заданное решение
@@ -111,8 +121,9 @@ func TestErrorMappingAndNonDisclosure(t *testing.T) {
 		wantCode int
 	}{
 		{"not found → 404", status.Error(codes.NotFound, secret), http.StatusNotFound},
-		{"failed precondition → 409", status.Error(codes.FailedPrecondition, secret), http.StatusConflict},
+		{"aborted → 409", status.Error(codes.Aborted, secret), http.StatusConflict},
 		{"already exists → 409", status.Error(codes.AlreadyExists, secret), http.StatusConflict},
+		{"failed precondition → 422", status.Error(codes.FailedPrecondition, secret), http.StatusUnprocessableEntity},
 		{"invalid argument → 400", status.Error(codes.InvalidArgument, secret), http.StatusBadRequest},
 		{"internal → 500", status.Error(codes.Internal, secret), http.StatusInternalServerError},
 		{"unknown → 500", status.Error(codes.Unavailable, secret), http.StatusInternalServerError},
@@ -175,7 +186,7 @@ func TestCreateService(t *testing.T) {
 		{
 			name:     "конфликт имени → 409",
 			body:     `{"name":"dup"}`,
-			stub:     &stubProjectsClient{err: status.Error(codes.FailedPrecondition, "занято")},
+			stub:     &stubProjectsClient{err: status.Error(codes.Aborted, "занято")},
 			wantCode: http.StatusConflict,
 		},
 	}
@@ -279,7 +290,7 @@ func TestSetServiceOwners(t *testing.T) {
 		{
 			name:     "конфликт версии → 409",
 			body:     `{"owners":["a"],"owners_version":1}`,
-			stub:     &stubProjectsClient{err: status.Error(codes.FailedPrecondition, "версия устарела")},
+			stub:     &stubProjectsClient{err: status.Error(codes.Aborted, "версия устарела")},
 			wantCode: http.StatusConflict,
 			wantCall: true,
 		},
@@ -351,6 +362,106 @@ func TestSetOwnersRBACAction(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/projects/demo/services/svc/owners", strings.NewReader(`{"owners":["a"],"owners_version":0}`)))
 
 	if idm.gotReq.GetResource() != "project:demo" || idm.gotReq.GetAction() != "change_owners" {
+		t.Fatalf("некорректная форма запроса RBAC: %+v", idm.gotReq)
+	}
+}
+
+// TestDecommissionService проверяет happy-path, маппинг предусловия (422) и
+// конфликта (409), а также RBAC-действие decommission.
+func TestDecommissionService(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		body     string
+		stub     *stubProjectsClient
+		wantCode int
+		wantCall bool
+	}{
+		{
+			name: "happy-path 200",
+			body: `{"load_drained":true}`,
+			stub: &stubProjectsClient{decommResp: &projectsv1.DecommissionServiceResponse{Service: &projectsv1.Service{
+				Project: "p1", Name: "svc", Status: projectsv1.ServiceStatus_SERVICE_STATUS_DECOMMISSIONED, DecommissionedAt: "2026-06-20T00:00:00Z",
+			}}},
+			wantCode: http.StatusOK,
+			wantCall: true,
+		},
+		{
+			name:     "предусловие (нагрузка не снята) → 422",
+			body:     `{"load_drained":false}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.FailedPrecondition, "нагрузка не снята")},
+			wantCode: http.StatusUnprocessableEntity,
+			wantCall: true,
+		},
+		{
+			name:     "конкурентный конфликт → 409",
+			body:     `{"load_drained":true}`,
+			stub:     &stubProjectsClient{err: status.Error(codes.Aborted, "конфликт")},
+			wantCode: http.StatusConflict,
+			wantCall: true,
+		},
+		{
+			name:     "битый JSON → 400",
+			body:     `{`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			router := newTestRouter(tt.stub)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/projects/p1/services/svc/decommission", strings.NewReader(tt.body))
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("код = %d, ожидалось %d (body=%q)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantCall && (tt.stub.gotDecomm == nil || tt.stub.gotDecomm.GetProject() != "p1" || tt.stub.gotDecomm.GetName() != "svc") {
+				t.Fatalf("DecommissionService вызван некорректно: %+v", tt.stub.gotDecomm)
+			}
+			if !tt.wantCall && tt.stub.gotDecomm != nil {
+				t.Fatalf("gRPC не должен вызываться при невалидном теле")
+			}
+			if tt.wantCode == http.StatusOK {
+				var got serviceSummary
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("ответ не парсится: %v", err)
+				}
+				if got.Status != "decommissioned" || got.DecommissionedAt == "" {
+					t.Fatalf("тело = %+v", got)
+				}
+			}
+		})
+	}
+}
+
+// TestDecommissionRBAC: отказ RBAC → 403 без gRPC; действие = decommission.
+func TestDecommissionRBAC(t *testing.T) {
+	t.Parallel()
+
+	// Отказ → 403, доменный gRPC не вызывается.
+	projects := &stubProjectsClient{}
+	router := newTestRouterWithIDM(projects, &stubIDMClient{allowed: false})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/projects/p1/services/svc/decommission", strings.NewReader(`{"load_drained":true}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("код = %d, ожидалось 403", rec.Code)
+	}
+	if projects.gotDecomm != nil {
+		t.Fatalf("при отказе RBAC доменный gRPC не должен вызываться")
+	}
+
+	// Форма запроса RBAC = (project:demo, decommission).
+	idm := &stubIDMClient{allowed: true}
+	router2 := newTestRouterWithIDM(&stubProjectsClient{
+		decommResp: &projectsv1.DecommissionServiceResponse{Service: &projectsv1.Service{Project: "demo", Name: "svc", Status: projectsv1.ServiceStatus_SERVICE_STATUS_DECOMMISSIONED}},
+	}, idm)
+	rec2 := httptest.NewRecorder()
+	router2.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/projects/demo/services/svc/decommission", strings.NewReader(`{"load_drained":true}`)))
+	if idm.gotReq.GetResource() != "project:demo" || idm.gotReq.GetAction() != "decommission" {
 		t.Fatalf("некорректная форма запроса RBAC: %+v", idm.gotReq)
 	}
 }

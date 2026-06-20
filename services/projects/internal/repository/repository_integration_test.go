@@ -288,3 +288,61 @@ func TestIntegrationSetOwners(t *testing.T) {
 		t.Fatalf("ожидали ErrNotFound, получили %v", nerr)
 	}
 }
+
+// TestIntegrationDecommission проверяет soft-delete через guarded-CAS: успешный
+// перевод ACTIVE→DECOMMISSIONED с проставлением decommissioned_at и сохранением
+// данных/владельцев, идемпотентный повтор, отказ-предусловие из creating и
+// NotFound для отсутствующего сервиса.
+func TestIntegrationDecommission(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	repo := New(pool)
+	ctx := context.Background()
+	const project = "it-decomm"
+	cleanupProject(t, pool, project)
+	defer cleanupProject(t, pool, project)
+
+	// Активный сервис с владельцем.
+	id := uuid.New()
+	if err := repo.Create(ctx, Service{ID: id, Project: project, Name: "svc", Status: StatusCreating}); err != nil {
+		t.Fatalf("вставка: %v", err)
+	}
+	if err := repo.TransitionStatus(ctx, id, StatusCreating, StatusActive); err != nil {
+		t.Fatalf("перевод в active: %v", err)
+	}
+	if _, _, err := repo.SetOwners(ctx, id, []string{"alice"}, 0); err != nil {
+		t.Fatalf("посев владельца: %v", err)
+	}
+
+	// Успешный soft-delete: статус и decommissioned_at, данные сохраняются.
+	got, err := repo.Decommission(ctx, id)
+	if err != nil {
+		t.Fatalf("Decommission: %v", err)
+	}
+	if got.Status != StatusDecommissioned || got.DecommissionedAt == nil {
+		t.Fatalf("ожидали decommissioned + decommissioned_at, получили %q at=%v", got.Status, got.DecommissionedAt)
+	}
+	if len(got.Owners) != 1 || got.Owners[0] != "alice" {
+		t.Fatalf("данные владельцев должны сохраняться, получили %v", got.Owners)
+	}
+
+	// Идемпотентный повтор: успех, статус не меняется.
+	if _, err := repo.Decommission(ctx, id); err != nil {
+		t.Fatalf("идемпотентный повтор: %v", err)
+	}
+
+	// Предусловие: из creating decommission недопустим.
+	cid := uuid.New()
+	if err := repo.Create(ctx, Service{ID: cid, Project: project, Name: "creating-svc", Status: StatusCreating}); err != nil {
+		t.Fatalf("вставка creating: %v", err)
+	}
+	if _, err := repo.Decommission(ctx, cid); !errors.Is(err, errs.ErrPrecondition) {
+		t.Fatalf("ожидали ErrPrecondition из creating, получили %v", err)
+	}
+
+	// NotFound для отсутствующего сервиса.
+	if _, err := repo.Decommission(ctx, uuid.New()); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("ожидали ErrNotFound, получили %v", err)
+	}
+}
