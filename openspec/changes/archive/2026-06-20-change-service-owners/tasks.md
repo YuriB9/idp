@@ -68,4 +68,4 @@
 
 - [x] 10.1 `GOWORK=off go mod tidy` во всех затронутых модулях (projects, devinfra-worker, idm, gateway, e2e) — tidy-check/govulncheck
 - [x] 10.2 Прогнать тесты модулей (+`integration` при доступной БД), golangci-lint (errname/paralleltest), govulncheck, `gen:check`
-- [ ] 10.3 Открыть PR с зелёным CI; после merge в master — `/opsx:archive` (только после merge)
+- [x] 10.3 Открыть PR с зелёным CI; после merge в master — `/opsx:archive` (только после merge)
