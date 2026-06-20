@@ -127,5 +127,5 @@
       govulncheck).
 - [x] 9.2 Тесты модулей, `golangci-lint` (errname/paralleltest), `govulncheck`,
       `gen:check` (proto+OpenAPI+TS), integration — зелёные.
-- [ ] 9.3 PR в `master`; после merge с зелёным CI — `/opsx:archive` (только после
-      merge).
+- [x] 9.3 PR в `master`; после merge с зелёным CI — `/opsx:archive` (только после
+      merge). PR #34 смержен в master (CI зелёный).
