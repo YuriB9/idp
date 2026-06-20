@@ -44,6 +44,17 @@ service ProjectsService {
   // worker'ом. Конфликт версии → FailedPrecondition; отсутствие записи →
   // NotFound. BREAKING: добавление метода в существующий сервис-контракт.
   rpc SetServiceOwners(SetServiceOwnersRequest) returns (SetServiceOwnersResponse);
+  // DecommissionService выводит активный сервис из эксплуатации (soft delete):
+  // данные каталога СОХРАНЯЮТСЯ, статус переводится guarded-CAS ACTIVE→DECOMMISSIONED,
+  // во внешних системах отзывается доступ (GitLab archive, Harbor read-only, Vault
+  // revoke SecretID) — асинхронно Temporal-workflow «Вывод из эксплуатации» с
+  // детерминированным WorkflowID. Поле load_drained — явное предусловие снятой
+  // нагрузки из K8s (в MVP K8s-worker нет, см. ADR-0012). Семантика идемпотентна:
+  // повторный вызов на уже выведенном сервисе → успех (no-op). Допустимый исходный
+  // статус — только ACTIVE; creating/failed или неснятая нагрузка →
+  // FailedPrecondition; конкурентная смена статуса → Aborted; отсутствие записи →
+  // NotFound. BREAKING: добавление метода в существующий сервис-контракт.
+  rpc DecommissionService(DecommissionServiceRequest) returns (DecommissionServiceResponse);
 }
 
 // Service — запись каталога (единица-сервис).
@@ -58,6 +69,9 @@ message Service {
   repeated string owners = 4;
   // owners_version — версия набора владельцев для optimistic-concurrency.
   int64 owners_version = 5;
+  // decommissioned_at — момент вывода сервиса из эксплуатации (RFC3339); пусто,
+  // если сервис не выведен. Аддитивное поле (ADR-0012).
+  string decommissioned_at = 6;
 }
 
 message GetServiceRequest {
@@ -75,6 +89,9 @@ message GetServiceResponse {
   repeated string owners = 4;
   // owners_version — версия набора владельцев для optimistic-concurrency.
   int64 owners_version = 5;
+  // decommissioned_at — момент вывода сервиса из эксплуатации (RFC3339); пусто,
+  // если сервис не выведен. Аддитивное поле (ADR-0012).
+  string decommissioned_at = 6;
 }
 
 message ListServicesRequest {
@@ -126,4 +143,20 @@ message SetServiceOwnersResponse {
   repeated string owners = 1;
   // owners_version — новая версия набора владельцев.
   int64 owners_version = 2;
+}
+
+message DecommissionServiceRequest {
+  // project — идентификатор проекта-владельца.
+  string project = 1;
+  // name — имя выводимого из эксплуатации сервиса.
+  string name = 2;
+  // load_drained — явное предусловие: нагрузка сервиса снята из K8s. В MVP
+  // K8s-worker отсутствует, поэтому снятие нагрузки подтверждается вызывающей
+  // стороной (ADR-0012). false → FailedPrecondition до любых побочных эффектов.
+  bool load_drained = 3;
+}
+
+message DecommissionServiceResponse {
+  // service — итоговое состояние записи (status=DECOMMISSIONED, decommissioned_at).
+  Service service = 1;
 }

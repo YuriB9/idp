@@ -27,6 +27,12 @@ type GitLab interface {
 	// RestoreMembers — компенсация: восстанавливает прежний состав участников
 	// (идемпотентно).
 	RestoreMembers(ctx context.Context, ref provisioning.ResourceRef, previous []string) error
+	// Archive архивирует репозиторий и отзывает доступы участников при выводе из
+	// эксплуатации (идемпотентно). Сценарий «Вывод из эксплуатации».
+	Archive(ctx context.Context, ref provisioning.ResourceRef) error
+	// Unarchive — компенсация: разархивирует репозиторий и восстанавливает доступы
+	// (идемпотентно).
+	Unarchive(ctx context.Context, ref provisioning.ResourceRef) error
 }
 
 // Harbor — клиент Harbor: директория образов и Robot Account.
@@ -35,6 +41,11 @@ type Harbor interface {
 	CreateProject(ctx context.Context, ref provisioning.ResourceRef) (provisioning.HarborResult, error)
 	// DeleteProject — компенсация: удаляет директорию образов (идемпотентно).
 	DeleteProject(ctx context.Context, ref provisioning.ResourceRef) error
+	// SetReadOnly переводит директорию образов в read-only и отзывает Robot при
+	// выводе из эксплуатации (идемпотентно). Сценарий «Вывод из эксплуатации».
+	SetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error
+	// SetWritable — компенсация: возвращает директорию в writable (идемпотентно).
+	SetWritable(ctx context.Context, ref provisioning.ResourceRef) error
 }
 
 // Vault — клиент Vault: политики и AppRole.
@@ -49,6 +60,10 @@ type Vault interface {
 	// RestoreOwners — компенсация: восстанавливает прежние политики доступа
 	// владельцев (идемпотентно).
 	RestoreOwners(ctx context.Context, ref provisioning.ResourceRef, previous []string) error
+	// RevokeSecretID отзывает активные SecretID/токены сервиса при выводе из
+	// эксплуатации — немедленное прекращение доступа (идемпотентно). НЕОБРАТИМО:
+	// компенсации нет (точка невозврата, ADR-0012).
+	RevokeSecretID(ctx context.Context, ref provisioning.ResourceRef) error
 }
 
 // Clients — собранный набор клиентов интеграций для регистрации в activities.

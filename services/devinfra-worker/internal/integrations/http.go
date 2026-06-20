@@ -171,6 +171,21 @@ func (c *gitLabHTTP) RestoreMembers(ctx context.Context, ref provisioning.Resour
 	return c.SyncMembers(ctx, ref, previous, nil)
 }
 
+func (c *gitLabHTTP) Archive(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Архивация репозитория (идемпотентно: повторная архивация — успех). В моке
+	// 409/404 трактуем как успешный исход.
+	proj := ref.Project + "%2F" + ref.Name
+	url := fmt.Sprintf("%s/api/v4/projects/%s/archive", c.base, proj)
+	return c.doer.call(ctx, http.MethodPost, url, nil, nil, http.StatusConflict, http.StatusNotFound)
+}
+
+func (c *gitLabHTTP) Unarchive(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Компенсация: разархивировать репозиторий (идемпотентно).
+	proj := ref.Project + "%2F" + ref.Name
+	url := fmt.Sprintf("%s/api/v4/projects/%s/unarchive", c.base, proj)
+	return c.doer.call(ctx, http.MethodPost, url, nil, nil, http.StatusConflict, http.StatusNotFound)
+}
+
 // --- Harbor ---
 
 type harborHTTP struct {
@@ -207,6 +222,24 @@ func (c *harborHTTP) CreateProject(ctx context.Context, ref provisioning.Resourc
 func (c *harborHTTP) DeleteProject(ctx context.Context, ref provisioning.ResourceRef) error {
 	projName := ref.Project + "-" + ref.Name
 	return c.doer.call(ctx, http.MethodDelete, c.base+"/api/v2.0/projects/"+projName, nil, nil, http.StatusNotFound)
+}
+
+func (c *harborHTTP) SetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Перевод директории в read-only + отзыв Robot (идемпотентно). 404 — успех.
+	projName := ref.Project + "-" + ref.Name
+	if err := c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
+		map[string]any{"metadata": map[string]string{"public": "false"}, "read_only": true}, nil, http.StatusNotFound); err != nil {
+		return err
+	}
+	robotName := "robot$" + projName
+	return c.doer.call(ctx, http.MethodDelete, c.base+"/api/v2.0/robots/"+robotName, nil, nil, http.StatusNotFound)
+}
+
+func (c *harborHTTP) SetWritable(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Компенсация: вернуть директорию в writable (идемпотентно).
+	projName := ref.Project + "-" + ref.Name
+	return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
+		map[string]any{"read_only": false}, nil, http.StatusNotFound)
 }
 
 // --- Vault ---
@@ -285,4 +318,12 @@ func (c *vaultHTTP) SyncOwners(ctx context.Context, ref provisioning.ResourceRef
 func (c *vaultHTTP) RestoreOwners(ctx context.Context, ref provisioning.ResourceRef, previous []string) error {
 	// Компенсация: восстановить прежний доступ (идемпотентно).
 	return c.SyncOwners(ctx, ref, previous, nil)
+}
+
+func (c *vaultHTTP) RevokeSecretID(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Отзыв всех активных SecretID AppRole — немедленное прекращение доступа
+	// (идемпотентно: 404 — успех). Необратимо: отозванный SecretID не вернуть.
+	role := ref.Project + "-" + ref.Name
+	url := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id/destroy", c.base, role)
+	return c.doer.call(ctx, http.MethodPost, url, map[string]string{}, nil, http.StatusNotFound)
 }

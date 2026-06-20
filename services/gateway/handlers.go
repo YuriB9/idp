@@ -65,11 +65,18 @@ type errorBody struct {
 
 // serviceSummary — представление сервиса для клиента (схема ServiceSummary).
 type serviceSummary struct {
-	Project       string   `json:"project"`
-	Name          string   `json:"name"`
-	Status        string   `json:"status"`
-	Owners        []string `json:"owners"`
-	OwnersVersion int64    `json:"owners_version"`
+	Project          string   `json:"project"`
+	Name             string   `json:"name"`
+	Status           string   `json:"status"`
+	Owners           []string `json:"owners"`
+	OwnersVersion    int64    `json:"owners_version"`
+	DecommissionedAt string   `json:"decommissioned_at,omitempty"`
+}
+
+// decommissionBody — тело запроса вывода из эксплуатации (схема
+// DecommissionServiceRequest).
+type decommissionBody struct {
+	LoadDrained bool `json:"load_drained"`
 }
 
 // setOwnersBody — тело запроса смены владельцев (схема SetServiceOwnersRequest).
@@ -109,6 +116,7 @@ func (a *servicesAPI) register(r chi.Router) {
 	r.Get("/projects/{project}/services", a.list)
 	r.Get("/projects/{project}/services/{name}", a.get)
 	r.Put("/projects/{project}/services/{name}/owners", a.setOwners)
+	r.Post("/projects/{project}/services/{name}/decommission", a.decommission)
 }
 
 // create — POST /projects/{project}/services: запускает создание сервиса.
@@ -165,11 +173,51 @@ func (a *servicesAPI) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.writeJSON(w, http.StatusOK, serviceSummary{
-		Project:       resp.GetProject(),
-		Name:          resp.GetName(),
-		Status:        statusString(resp.GetStatus()),
-		Owners:        ownersOrEmpty(resp.GetOwners()),
-		OwnersVersion: resp.GetOwnersVersion(),
+		Project:          resp.GetProject(),
+		Name:             resp.GetName(),
+		Status:           statusString(resp.GetStatus()),
+		Owners:           ownersOrEmpty(resp.GetOwners()),
+		OwnersVersion:    resp.GetOwnersVersion(),
+		DecommissionedAt: resp.GetDecommissionedAt(),
+	})
+}
+
+// decommission — POST /projects/{project}/services/{name}/decommission: вывод
+// сервиса из эксплуатации (soft-delete). RBAC decommission (fail-closed) до
+// проксирования. Тело несёт явное предусловие load_drained (ADR-0012).
+func (a *servicesAPI) decommission(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "name")
+
+	// RBAC: проверка права decommission до любой обработки (fail-closed).
+	if !a.authorize(w, r, project, "decommission") {
+		return
+	}
+
+	var body decommissionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "некорректное тело запроса")
+		return
+	}
+
+	resp, err := a.client.DecommissionService(r.Context(), &projectsv1.DecommissionServiceRequest{
+		Project:     project,
+		Name:        name,
+		LoadDrained: body.LoadDrained,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+
+	svc := resp.GetService()
+	a.writeJSON(w, http.StatusOK, serviceSummary{
+		Project:          svc.GetProject(),
+		Name:             svc.GetName(),
+		Status:           statusString(svc.GetStatus()),
+		Owners:           ownersOrEmpty(svc.GetOwners()),
+		OwnersVersion:    svc.GetOwnersVersion(),
+		DecommissionedAt: svc.GetDecommissionedAt(),
 	})
 }
 
@@ -261,11 +309,12 @@ func (a *servicesAPI) list(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, s := range resp.GetServices() {
 		out.Services = append(out.Services, serviceSummary{
-			Project:       s.GetProject(),
-			Name:          s.GetName(),
-			Status:        statusString(s.GetStatus()),
-			Owners:        ownersOrEmpty(s.GetOwners()),
-			OwnersVersion: s.GetOwnersVersion(),
+			Project:          s.GetProject(),
+			Name:             s.GetName(),
+			Status:           statusString(s.GetStatus()),
+			Owners:           ownersOrEmpty(s.GetOwners()),
+			OwnersVersion:    s.GetOwnersVersion(),
+			DecommissionedAt: s.GetDecommissionedAt(),
 		})
 	}
 	a.writeJSON(w, http.StatusOK, out)
@@ -312,8 +361,14 @@ func httpFromGRPC(err error) (int, string) {
 	switch status.Code(err) {
 	case codes.NotFound:
 		return http.StatusNotFound, "сервис не найден"
-	case codes.FailedPrecondition, codes.AlreadyExists:
+	case codes.Aborted, codes.AlreadyExists:
+		// Конкурентный конфликт guarded-CAS (Aborted) и занятое имя (AlreadyExists)
+		// → 409 (ADR-0012).
 		return http.StatusConflict, "конфликт состояния"
+	case codes.FailedPrecondition:
+		// Семантическое предусловие не выполнено (нагрузка не снята / недопустимый
+		// исходный статус) → 422 (ADR-0012).
+		return http.StatusUnprocessableEntity, "предусловие не выполнено"
 	case codes.InvalidArgument:
 		return http.StatusBadRequest, "некорректный запрос"
 	case codes.PermissionDenied:

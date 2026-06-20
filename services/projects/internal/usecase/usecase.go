@@ -34,6 +34,9 @@ type WorkflowStarter interface {
 	// нормализованный желаемый набор, previous — текущий набор (для diff/
 	// компенсаций), expectedVersion — версия для guarded-CAS каталога.
 	StartChangeOwners(ctx context.Context, serviceID, project, name string, desired, previous []string, expectedVersion int64) error
+	// StartDecommission запускает workflow «Вывод из эксплуатации». loadDrained —
+	// явное предусловие снятой нагрузки из K8s (ADR-0012).
+	StartDecommission(ctx context.Context, serviceID, project, name string, loadDrained bool) error
 }
 
 // Catalog — usecase каталога сервисов.
@@ -118,6 +121,41 @@ func (c *Catalog) SetServiceOwners(ctx context.Context, project, name string, ow
 	}
 	// Проектируемое состояние: фактическая запись произойдёт в workflow.
 	return desired, expectedVersion + 1, nil
+}
+
+// DecommissionService выводит сервис из эксплуатации (soft-delete): читает
+// запись, проверяет допустимость исходного статуса и предусловие снятой нагрузки,
+// затем запускает Temporal-workflow «Вывод из эксплуатации» (фактический отзыв
+// доступов и guarded-CAS перевод статуса — в workflow, асинхронно). Семантика
+// идемпотентна: уже выведенный сервис → no-op (workflow не стартует, возвращается
+// текущая запись). Недопустимый исходный статус (creating/failed) или неснятая
+// нагрузка → errs.ErrPrecondition; отсутствие записи → errs.ErrNotFound.
+// Возвращает запись каталога как она персистирована на момент вызова.
+func (c *Catalog) DecommissionService(ctx context.Context, project, name string, loadDrained bool) (repository.Service, error) {
+	if c.starter == nil {
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow не сконфигурирован")
+	}
+	svc, err := c.store.GetByName(ctx, project, name)
+	if err != nil {
+		return repository.Service{}, fmt.Errorf("usecase: чтение сервиса для вывода из эксплуатации: %w", err)
+	}
+	switch svc.Status {
+	case repository.StatusDecommissioned:
+		// Идемпотентный no-op: целевое состояние уже достигнуто.
+		return svc, nil
+	case repository.StatusCreating, repository.StatusFailed:
+		return repository.Service{}, fmt.Errorf("usecase: недопустимый исходный статус %q: %w", svc.Status, errs.ErrPrecondition)
+	}
+	// Предусловие снятой нагрузки из K8s проверяется до любых побочных эффектов
+	// (ADR-0012). Фактическая проверка-граница — в workflow (activity EnsureLoadDrained),
+	// но очевидный отказ отсекаем синхронно, не стартуя workflow.
+	if !loadDrained {
+		return repository.Service{}, fmt.Errorf("usecase: нагрузка не снята из K8s: %w", errs.ErrPrecondition)
+	}
+	if err := c.starter.StartDecommission(ctx, svc.ID.String(), project, name, loadDrained); err != nil {
+		return repository.Service{}, fmt.Errorf("usecase: запуск workflow вывода из эксплуатации: %w", err)
+	}
+	return svc, nil
 }
 
 // normalizeOwners приводит набор владельцев к нормальной форме: отбрасывает

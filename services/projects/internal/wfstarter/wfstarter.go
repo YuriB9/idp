@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/YuriB9/idp/services/projects/changeowners"
+	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -67,6 +68,29 @@ func (s *Starter) StartChangeOwners(ctx context.Context, serviceID, project, nam
 	}
 	if _, err := s.client.ExecuteWorkflow(ctx, opts, changeowners.ChangeOwnersWorkflow, in); err != nil {
 		return fmt.Errorf("wfstarter: запуск workflow смены владельцев: %w", err)
+	}
+	return nil
+}
+
+// StartDecommission запускает workflow «Вывод из эксплуатации» с детерминированным
+// WorkflowID. Политика та же, что у создания/смены владельцев: не стартовать
+// второй конкурентный workflow для того же сервиса; повторный запуск после
+// терминального статуса допускается.
+func (s *Starter) StartDecommission(ctx context.Context, serviceID, project, name string, loadDrained bool) error {
+	opts := client.StartWorkflowOptions{
+		ID:                       decommission.WorkflowID(project, name),
+		TaskQueue:                s.taskQueue,
+		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
+		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+	}
+	in := decommission.DecommissionInput{
+		ServiceID:   serviceID,
+		Project:     project,
+		Name:        name,
+		LoadDrained: loadDrained,
+	}
+	if _, err := s.client.ExecuteWorkflow(ctx, opts, decommission.DecommissionWorkflow, in); err != nil {
+		return fmt.Errorf("wfstarter: запуск workflow вывода из эксплуатации: %w", err)
 	}
 	return nil
 }

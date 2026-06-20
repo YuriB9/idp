@@ -56,6 +56,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project}/services/{name}/decommission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Вывод сервиса из эксплуатации (soft delete)
+         * @description Выводит активный сервис из эксплуатации (soft delete): данные каталога сохраняются, статус переводится в decommissioned, во внешних системах отзывается доступ (GitLab archive, Harbor read-only, Vault revoke). Тело несёт явное предусловие load_drained (нагрузка снята из K8s, ADR-0012). Идемпотентно: повтор на уже выведенном сервисе → 200. Допустим только исходный статус active; предусловие не выполнено (нагрузка не снята или статус creating/failed) → 422; конкурентная смена статуса → 409; отсутствие сервиса → 404; отказ RBAC (право decommission) → 403.
+         */
+        post: operations["decommissionService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project}/services/{name}/owners": {
         parameters: {
             query?: never;
@@ -100,6 +120,8 @@ export interface components {
              * @description Версия набора владельцев для optimistic-concurrency.
              */
             owners_version: number;
+            /** @description Момент вывода сервиса из эксплуатации (RFC3339); отсутствует/пусто, если сервис не выведен (ADR-0012). */
+            decommissioned_at?: string;
         };
         ServiceList: {
             services: components["schemas"]["ServiceSummary"][];
@@ -132,6 +154,10 @@ export interface components {
              * @description Новая версия набора владельцев.
              */
             owners_version: number;
+        };
+        DecommissionServiceRequest: {
+            /** @description Явное предусловие: нагрузка сервиса снята из K8s. В MVP K8s-worker отсутствует, поэтому снятие подтверждается клиентом (ADR-0012). false → 422 до любых побочных эффектов. */
+            load_drained: boolean;
         };
         Error: {
             /** @description Стабильное сообщение об ошибке для клиента. Внутренние детали (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера. */
@@ -168,6 +194,15 @@ export interface components {
         };
         /** @description Доступ запрещён (RBAC, fail-closed) */
         Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса). */
+        PreconditionFailed: {
             headers: {
                 [name: string]: unknown;
             };
@@ -290,6 +325,40 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    decommissionService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор проекта-владельца. */
+                project: components["parameters"]["ProjectPath"];
+                /** @description Имя сервиса внутри проекта. */
+                name: components["parameters"]["ServiceNamePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecommissionServiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Вывод из эксплуатации запущен (или сервис уже выведен) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["PreconditionFailed"];
         };
     };
     setServiceOwners: {

@@ -13,6 +13,7 @@ import (
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/activities"
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/integrations"
 	"github.com/YuriB9/idp/services/projects/changeowners"
+	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -175,5 +176,67 @@ func TestActivities_ProvisionDelegates(t *testing.T) {
 	}
 	if !mem.HasRepo(ref) {
 		t.Fatal("репозиторий должен быть создан через клиент интеграции")
+	}
+}
+
+// fakeDecomm — управляемый стаб DecommStore.
+type fakeDecomm struct {
+	err error
+	got string
+}
+
+func (f *fakeDecomm) Decommission(_ context.Context, id string) error {
+	f.got = id
+	return f.err
+}
+
+// TestActivities_EnsureLoadDrained: при снятой нагрузке проверка проходит; при
+// неснятой — non-retryable ошибка предусловия (отказ до побочных эффектов).
+func TestActivities_EnsureLoadDrained(t *testing.T) {
+	t.Parallel()
+	acts := activities.New(integrations.NewMemory().Clients(), &fakeStatus{})
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.EnsureLoadDrained)
+	ref := provisioning.ResourceRef{ServiceID: "svc", Project: "p", Name: "n"}
+
+	if _, err := env.ExecuteActivity(acts.EnsureLoadDrained,
+		decommission.EnsureLoadDrainedInput{Ref: ref, LoadDrained: true}); err != nil {
+		t.Fatalf("снятая нагрузка: неожиданная ошибка: %v", err)
+	}
+	if _, err := env.ExecuteActivity(acts.EnsureLoadDrained,
+		decommission.EnsureLoadDrainedInput{Ref: ref, LoadDrained: false}); err == nil {
+		t.Fatal("ожидали ошибку предусловия при неснятой нагрузке")
+	}
+}
+
+// TestActivities_DecommissionRevokesAccess: обратные операции отзывают доступ во
+// внешних системах (archive/read-only/revoke) и переводят каталог.
+func TestActivities_DecommissionRevokesAccess(t *testing.T) {
+	t.Parallel()
+	mem := integrations.NewMemory()
+	fd := &fakeDecomm{}
+	acts := activities.New(mem.Clients(), &fakeStatus{}, activities.WithDecommission(fd))
+
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(acts.GitLabArchive)
+	env.RegisterActivity(acts.HarborSetReadOnly)
+	env.RegisterActivity(acts.VaultRevokeSecretID)
+	env.RegisterActivity(acts.CatalogDecommission)
+	ref := provisioning.ResourceRef{ServiceID: "svc", Project: "p", Name: "n"}
+
+	for _, fn := range []any{acts.GitLabArchive, acts.HarborSetReadOnly, acts.VaultRevokeSecretID, acts.CatalogDecommission} {
+		if _, err := env.ExecuteActivity(fn, ref); err != nil {
+			t.Fatalf("activity: неожиданная ошибка: %v", err)
+		}
+	}
+	if !mem.IsArchived(ref) || !mem.IsHarborReadOnly(ref) || !mem.IsVaultRevoked(ref) {
+		t.Fatalf("ожидали отзыв доступа во всех системах: archived=%v ro=%v revoked=%v",
+			mem.IsArchived(ref), mem.IsHarborReadOnly(ref), mem.IsVaultRevoked(ref))
+	}
+	if fd.got != "svc" {
+		t.Fatalf("ожидали Decommission(svc), получили %q", fd.got)
 	}
 }

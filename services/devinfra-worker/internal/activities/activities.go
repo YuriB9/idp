@@ -8,6 +8,7 @@ package activities
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
@@ -15,6 +16,7 @@ import (
 	"github.com/YuriB9/idp/pkg/errs"
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/integrations"
 	"github.com/YuriB9/idp/services/projects/changeowners"
+	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -37,14 +39,42 @@ type RoleAdmin interface {
 	RevokeRole(ctx context.Context, subject, role string) error
 }
 
+// DecommStore — зависимость activity вывода из эксплуatации от слоя каталога
+// (guarded-CAS ACTIVE→DECOMMISSIONED, ADR-0012).
+type DecommStore interface {
+	Decommission(ctx context.Context, serviceID string) error
+}
+
+// LoadChecker — граница проверки снятой нагрузки K8s (ADR-0012). В MVP реализация
+// опирается на явный флаг load_drained; будущий K8s-worker подменит её реальным
+// запросом к кластеру без изменения тела workflow.
+type LoadChecker interface {
+	EnsureDrained(ctx context.Context, ref provisioning.ResourceRef, loadDrained bool) error
+}
+
+// FlagLoadChecker — MVP-реализация LoadChecker: трактует переданный флаг
+// load_drained как предусловие (K8s-worker в MVP отсутствует). Невыполненное
+// предусловие → errs.ErrPrecondition (далее non-retryable, ADR-0012).
+type FlagLoadChecker struct{}
+
+// EnsureDrained проверяет явное предусловие снятой нагрузки.
+func (FlagLoadChecker) EnsureDrained(_ context.Context, _ provisioning.ResourceRef, loadDrained bool) error {
+	if !loadDrained {
+		return fmt.Errorf("activities: нагрузка не снята из K8s: %w", errs.ErrPrecondition)
+	}
+	return nil
+}
+
 // Activities связывает клиентов интеграций и слой каталога с activity-методами.
 type Activities struct {
-	gitlab   integrations.GitLab
-	harbor   integrations.Harbor
-	vault    integrations.Vault
-	status   StatusStore
-	owners   OwnersStore
-	idmRoles RoleAdmin
+	gitlab      integrations.GitLab
+	harbor      integrations.Harbor
+	vault       integrations.Vault
+	status      StatusStore
+	owners      OwnersStore
+	idmRoles    RoleAdmin
+	decomm      DecommStore
+	loadChecker LoadChecker
 }
 
 // Option конфигурирует Activities (для сценариев сверх провижна).
@@ -56,10 +86,19 @@ func WithOwners(o OwnersStore) Option { return func(a *Activities) { a.owners = 
 // WithIDMRoles подключает синхронизацию ролей IDM (сценарий смены владельцев).
 func WithIDMRoles(r RoleAdmin) Option { return func(a *Activities) { a.idmRoles = r } }
 
-// New собирает набор activities. Зависимости сценария смены владельцев
-// (OwnersStore/RoleAdmin) подключаются опциями WithOwners/WithIDMRoles.
+// WithDecommission подключает перевод каталога в DECOMMISSIONED (сценарий вывода
+// из эксплуатации).
+func WithDecommission(d DecommStore) Option { return func(a *Activities) { a.decomm = d } }
+
+// WithLoadChecker подменяет проверку снятой нагрузки K8s (по умолчанию —
+// FlagLoadChecker). Точка расширения под будущий K8s-worker (ADR-0012).
+func WithLoadChecker(l LoadChecker) Option { return func(a *Activities) { a.loadChecker = l } }
+
+// New собирает набор activities. Зависимости сценариев смены владельцев и вывода
+// из эксплуатации подключаются опциями WithOwners/WithIDMRoles/WithDecommission.
+// Проверка снятой нагрузки по умолчанию — FlagLoadChecker (MVP, ADR-0012).
 func New(clients *integrations.Clients, status StatusStore, opts ...Option) *Activities {
-	a := &Activities{gitlab: clients.GitLab, harbor: clients.Harbor, vault: clients.Vault, status: status}
+	a := &Activities{gitlab: clients.GitLab, harbor: clients.Harbor, vault: clients.Vault, status: status, loadChecker: FlagLoadChecker{}}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -80,7 +119,8 @@ func classify(err error) error {
 	case errors.Is(err, errs.ErrValidation),
 		errors.Is(err, errs.ErrUnauthorized),
 		errors.Is(err, errs.ErrForbidden),
-		errors.Is(err, errs.ErrConflict):
+		errors.Is(err, errs.ErrConflict),
+		errors.Is(err, errs.ErrPrecondition):
 		return temporal.NewNonRetryableApplicationError(err.Error(), fatalType, err)
 	default:
 		return err
@@ -201,8 +241,54 @@ func (a *Activities) IDMSyncOwnerRoles(ctx context.Context, in changeowners.IDMS
 	return nil
 }
 
-// Register регистрирует все activities под именами из пакетов provisioning и
-// changeowners на переданном worker'е.
+// --- Вывод из эксплуатации (soft-delete) ---
+
+// EnsureLoadDrained проверяет предусловие снятой нагрузки K8s до любых отзывов
+// доступа (ADR-0012). Невыполнение → non-retryable ErrPrecondition.
+func (a *Activities) EnsureLoadDrained(ctx context.Context, in decommission.EnsureLoadDrainedInput) error {
+	activity.RecordHeartbeat(ctx)
+	return classify(a.loadChecker.EnsureDrained(ctx, in.Ref, in.LoadDrained))
+}
+
+// GitLabArchive архивирует репозиторий и отзывает доступы участников (идемпотентно).
+func (a *Activities) GitLabArchive(ctx context.Context, ref provisioning.ResourceRef) error {
+	activity.RecordHeartbeat(ctx)
+	return classify(a.gitlab.Archive(ctx, ref))
+}
+
+// GitLabUnarchive — компенсация: разархивирует репозиторий (идемпотентно).
+func (a *Activities) GitLabUnarchive(ctx context.Context, ref provisioning.ResourceRef) error {
+	activity.RecordHeartbeat(ctx)
+	return a.gitlab.Unarchive(ctx, ref)
+}
+
+// HarborSetReadOnly переводит директорию образов в read-only и отзывает Robot.
+func (a *Activities) HarborSetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error {
+	activity.RecordHeartbeat(ctx)
+	return classify(a.harbor.SetReadOnly(ctx, ref))
+}
+
+// HarborSetWritable — компенсация: возвращает директорию в writable (идемпотентно).
+func (a *Activities) HarborSetWritable(ctx context.Context, ref provisioning.ResourceRef) error {
+	activity.RecordHeartbeat(ctx)
+	return a.harbor.SetWritable(ctx, ref)
+}
+
+// VaultRevokeSecretID отзывает активные SecretID/токены сервиса — немедленное
+// прекращение доступа (идемпотентно). Точка невозврата (необратимо), компенсации нет.
+func (a *Activities) VaultRevokeSecretID(ctx context.Context, ref provisioning.ResourceRef) error {
+	activity.RecordHeartbeat(ctx)
+	return classify(a.vault.RevokeSecretID(ctx, ref))
+}
+
+// CatalogDecommission — guarded-CAS перевод ACTIVE→DECOMMISSIONED (идемпотентно).
+// Конфликт версии/статуса (ErrConflict) ретраем не исправить → non-retryable.
+func (a *Activities) CatalogDecommission(ctx context.Context, ref provisioning.ResourceRef) error {
+	return classify(a.decomm.Decommission(ctx, ref.ServiceID))
+}
+
+// Register регистрирует все activities под именами из пакетов provisioning,
+// changeowners и decommission на переданном worker'е.
 func (a *Activities) Register(r registrar) {
 	reg := func(fn any, name string) {
 		r.RegisterActivityWithOptions(fn, activityOptions(name))
@@ -223,4 +309,12 @@ func (a *Activities) Register(r registrar) {
 	reg(a.VaultRestoreOwners, changeowners.ActivityVaultRestoreOwners)
 	reg(a.CatalogSetOwners, changeowners.ActivityCatalogSetOwners)
 	reg(a.IDMSyncOwnerRoles, changeowners.ActivityIDMSyncOwnerRoles)
+	// Вывод из эксплуатации.
+	reg(a.EnsureLoadDrained, decommission.ActivityEnsureLoadDrained)
+	reg(a.GitLabArchive, decommission.ActivityGitLabArchive)
+	reg(a.GitLabUnarchive, decommission.ActivityGitLabUnarchive)
+	reg(a.HarborSetReadOnly, decommission.ActivityHarborSetReadOnly)
+	reg(a.HarborSetWritable, decommission.ActivityHarborSetWritable)
+	reg(a.VaultRevokeSecretID, decommission.ActivityVaultRevokeSecretID)
+	reg(a.CatalogDecommission, decommission.ActivityCatalogDecommission)
 }

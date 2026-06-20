@@ -44,6 +44,19 @@ func (s *StatusStore) Fail(ctx context.Context, serviceID string) error {
 	return s.repo.TransitionStatus(ctx, id, repository.StatusCreating, repository.StatusFailed)
 }
 
+// Decommission выполняет soft-delete: guarded-CAS ACTIVE→DECOMMISSIONED с
+// проставлением decommissioned_at (ADR-0012). Идемпотентен (повтор на уже
+// выведенном сервисе → успех). Конкурентная смена статуса → errs.ErrConflict;
+// недопустимый исходный статус → errs.ErrPrecondition; отсутствие → errs.ErrNotFound.
+func (s *StatusStore) Decommission(ctx context.Context, serviceID string) error {
+	id, err := uuid.Parse(serviceID)
+	if err != nil {
+		return fmt.Errorf("catalog: некорректный service_id %q: %w", serviceID, err)
+	}
+	_, err = s.repo.Decommission(ctx, id)
+	return err
+}
+
 // SetOwners выполняет guarded-CAS замену набора владельцев (docs/adr/0011).
 // Конфликт версии → errs.ErrConflict, отсутствие записи → errs.ErrNotFound.
 func (s *StatusStore) SetOwners(ctx context.Context, serviceID string, desired []string, expectedVersion int64) error {

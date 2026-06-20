@@ -34,6 +34,7 @@ import (
 	"github.com/YuriB9/idp/services/devinfra-worker/internal/integrations"
 	"github.com/YuriB9/idp/services/projects/catalog"
 	"github.com/YuriB9/idp/services/projects/changeowners"
+	"github.com/YuriB9/idp/services/projects/decommission"
 	"github.com/YuriB9/idp/services/projects/provisioning"
 )
 
@@ -114,6 +115,7 @@ func run() error {
 	acts := activities.New(clients, store,
 		activities.WithOwners(store),
 		activities.WithIDMRoles(idmRoleAdmin{c: idmv1.NewRoleAdminServiceClient(idmConn)}),
+		activities.WithDecommission(store),
 	)
 
 	temporalClient, err := client.NewLazyClient(client.Options{
@@ -132,6 +134,8 @@ func run() error {
 		workflow.RegisterOptions{Name: provisioning.WorkflowName})
 	w.RegisterWorkflowWithOptions(changeowners.ChangeOwnersWorkflow,
 		workflow.RegisterOptions{Name: changeowners.WorkflowName})
+	w.RegisterWorkflowWithOptions(decommission.DecommissionWorkflow,
+		workflow.RegisterOptions{Name: decommission.WorkflowName})
 	acts.Register(w)
 
 	// alive отражает, что worker запущен и поллит task-queue (k8s не должен слать

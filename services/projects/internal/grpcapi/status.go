@@ -2,10 +2,20 @@ package grpcapi
 
 import (
 	"fmt"
+	"time"
 
 	projectsv1 "github.com/YuriB9/idp/pkg/api/projects/v1"
 	"github.com/YuriB9/idp/services/projects/internal/repository"
 )
+
+// decommissionedAtToProto форматирует момент вывода из эксплуатации в RFC3339;
+// для не выведенных сервисов (nil) — пустая строка.
+func decommissionedAtToProto(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
 
 // statusToProto переводит доменный статус в proto-enum. Неизвестное значение —
 // ошибка (не молчаливый UNSPECIFIED), чтобы рассинхрон не утёк наружу.
@@ -31,10 +41,11 @@ func serviceToProto(s repository.Service) (*projectsv1.Service, error) {
 		return nil, err
 	}
 	return &projectsv1.Service{
-		Project:       s.Project,
-		Name:          s.Name,
-		Status:        st,
-		Owners:        s.Owners,
-		OwnersVersion: s.OwnersVersion,
+		Project:          s.Project,
+		Name:             s.Name,
+		Status:           st,
+		Owners:           s.Owners,
+		OwnersVersion:    s.OwnersVersion,
+		DecommissionedAt: decommissionedAtToProto(s.DecommissionedAt),
 	}, nil
 }
