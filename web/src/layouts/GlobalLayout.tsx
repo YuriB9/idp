@@ -1,6 +1,6 @@
 // Глобальный каркас портала: боковая навигация + шапка. Единый визуальный язык
 // с остальными фронтендами платформы (zinc/Geist, sidebar + header).
-import { Boxes, Layers, ServerCog } from "lucide-react";
+import { Boxes, FileCode2, Layers, ServerCog, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
@@ -32,6 +32,22 @@ export function GlobalLayout() {
             <Layers className="size-4" />
             Сервисы
           </NavLink>
+          <NavLink to="/iam" className={navLinkClass}>
+            <ShieldCheck className="size-4" />
+            Роли и доступы
+          </NavLink>
+          {/* Статическая страница Swagger UI (вне react-router) — обычная ссылка
+              с полной навигацией; открываем в новой вкладке. Одиночный файл
+              /swagger.html, чтобы не зависеть от директорийного индекса. */}
+          <a
+            href="/swagger.html"
+            target="_blank"
+            rel="noreferrer"
+            className={navLinkClass({ isActive: false })}
+          >
+            <FileCode2 className="size-4" />
+            API (Swagger)
+          </a>
         </nav>
         <div className="mt-auto p-3 text-xs text-muted-foreground">
           Проект:{" "}

@@ -28,6 +28,100 @@ service RoleAdminService {
   rpc RevokeRole(RevokeRoleRequest) returns (RevokeRoleResponse);
 }
 
+// IamAdminService — читающий контракт IAM-админки (ADR-0014): просмотр каталога
+// ролей/прав и привязок субъект↔роль. Только чтение (без побочных эффектов на
+// кэш решений). Путь привилегированный: gateway проверяет право (read,
+// iam:global) перед КАЖДОЙ ручкой (fail-closed). Расширение аддитивно
+// (wire-совместимо): новый сервис и сообщения, существующие RPC не меняются.
+// Мутации привязок выполняет RoleAdminService (переиспользуется, не дублируется).
+service IamAdminService {
+  // ListRoles возвращает все роли каталога (без пагинации — справочник мал).
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  // ListPermissions возвращает все права каталога (без пагинации).
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse);
+  // GetRolePermissions возвращает права конкретной роли. Несуществующая роль →
+  // NotFound; пустое имя → InvalidArgument.
+  rpc GetRolePermissions(GetRolePermissionsRequest) returns (GetRolePermissionsResponse);
+  // ListSubjectsWithRoles перечисляет субъектов (DISTINCT subject из
+  // subject_roles) с их ролями; keyset-пагинация по subject (ASC). Субъекты без
+  // ролей системе неизвестны и не возвращаются.
+  rpc ListSubjectsWithRoles(ListSubjectsWithRolesRequest) returns (ListSubjectsWithRolesResponse);
+  // GetSubjectRoles возвращает роли субъекта (пустой набор, не NotFound, если
+  // ролей нет); пустой subject → InvalidArgument.
+  rpc GetSubjectRoles(GetSubjectRolesRequest) returns (GetSubjectRolesResponse);
+}
+
+// Role — роль каталога. Стабильный идентификатор роли — её name (им же оперируют
+// AssignRole/RevokeRole); внутренний id (UUID) наружу не отдаётся.
+message Role {
+  // name — человекочитаемое уникальное имя роли.
+  string name = 1;
+}
+
+// Permission — право: пара (action, resource), сравнение строгое.
+message Permission {
+  // action — действие (например, "read", "write", "create").
+  string action = 1;
+  // resource — целевой ресурс (например, "iam:global", "project:demo").
+  string resource = 2;
+}
+
+// SubjectRoles — субъект и набор имён его ролей.
+message SubjectRoles {
+  // subject — идентификатор субъекта (sub из JWT).
+  string subject = 1;
+  // roles — имена ролей субъекта.
+  repeated string roles = 2;
+}
+
+message ListRolesRequest {}
+
+message ListRolesResponse {
+  // roles — полный список ролей каталога.
+  repeated Role roles = 1;
+}
+
+message ListPermissionsRequest {}
+
+message ListPermissionsResponse {
+  // permissions — полный список прав каталога.
+  repeated Permission permissions = 1;
+}
+
+message GetRolePermissionsRequest {
+  // role — имя роли, чьи права запрашиваются.
+  string role = 1;
+}
+
+message GetRolePermissionsResponse {
+  // permissions — права запрошенной роли.
+  repeated Permission permissions = 1;
+}
+
+message ListSubjectsWithRolesRequest {
+  // page_size — желаемый размер страницы; сервер клампит к пределу (0 → дефолт).
+  int32 page_size = 1;
+  // page_token — непрозрачный курсор keyset (пусто — первая страница).
+  string page_token = 2;
+}
+
+message ListSubjectsWithRolesResponse {
+  // subjects — страница субъектов с их ролями (ASC по subject).
+  repeated SubjectRoles subjects = 1;
+  // next_page_token — курсор следующей страницы (пусто — страниц больше нет).
+  string next_page_token = 2;
+}
+
+message GetSubjectRolesRequest {
+  // subject — идентификатор субъекта.
+  string subject = 1;
+}
+
+message GetSubjectRolesResponse {
+  // roles — имена ролей субъекта (пусто, если ролей нет).
+  repeated string roles = 1;
+}
+
 message CheckAccessRequest {
   // subject — идентификатор пользователя/сервиса (например, sub из JWT).
   string subject = 1;

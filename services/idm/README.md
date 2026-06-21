@@ -109,6 +109,71 @@ IDM_TEST_DSN="postgres://idm:idm@localhost:5433/idm?sslmode=disable" \
   go test -tags=integration ./services/idm/...
 ```
 
+## Читающий каталог IAM-админки (IamAdminService) и раздел портала
+
+Поверх `CheckAccess`/`RoleAdminService` IDM предоставляет **читающий** контракт
+`IamAdminService` для раздела портала «Роли и доступы» (ADR-0014):
+
+- `ListRoles` — все роли каталога (по `name`).
+- `ListPermissions` — все права (`action`, `resource`).
+- `GetRolePermissions(role)` — права роли (несуществующая роль → `NotFound`).
+- `ListSubjectsWithRoles(page_size, page_token)` — субъекты с их ролями,
+  keyset-пагинация по `subject` (DISTINCT из `subject_roles`).
+- `GetSubjectRoles(subject)` — роли субъекта (пусто, если ролей нет).
+
+Чтение каталога **не имеет побочных эффектов на кэш решений** (только SELECT).
+Назначение/снятие ролей из портала переиспользует идемпотентные
+`RoleAdminService.AssignRole`/`RevokeRole` (после мутации — `InvalidateSubject`
+по затронутому субъекту). Перечисление субъектов основано на `DISTINCT subject`:
+**субъекты без ролей системе неизвестны и в списке не видны** (реестра
+пользователей нет; назначить роль можно любому subject по строке).
+
+### Авторизация админки (fail-closed)
+
+IAM-админка — привилегированный периметр. Полномочия — отдельные горизонтальные
+действия на ресурсе `iam:global`:
+
+- `(read, iam:global)` — все читающие ручки каталога;
+- `(write, iam:global)` — назначение/снятие ролей субъектам.
+
+gateway вызывает `CheckAccess` **перед каждой** IAM-ручкой (GET → `read`,
+POST/DELETE → `write`); отказ ИЛИ недоступность IDM → **403** (fail-closed),
+запрос в IDM не проксируется, внутренние детали наружу не уходят (деталь — в лог
+по ключу slog `err`). Ни `read`, ни `write` не наследуются неявно из
+project-действий и наоборот.
+
+### REST-ручки периметра
+
+| Метод/путь | Действие RBAC | Семантика |
+| --- | --- | --- |
+| `GET /api/iam/roles` | `read@iam:global` | список ролей |
+| `GET /api/iam/permissions` | `read@iam:global` | все права |
+| `GET /api/iam/roles/{role}/permissions` | `read@iam:global` | права роли (нет роли → 404) |
+| `GET /api/iam/subjects` | `read@iam:global` | субъекты с ролями (keyset) |
+| `GET /api/iam/subjects/{subject}/roles` | `read@iam:global` | роли субъекта |
+| `POST /api/iam/subjects/{subject}/roles/{role}` | `write@iam:global` | назначить (идемпотентно → 200) |
+| `DELETE /api/iam/subjects/{subject}/roles/{role}` | `write@iam:global` | снять (идемпотентно → 200) |
+
+Assign/revoke **идемпотентны**: повторное назначение и снятие отсутствующей связки
+возвращают `200` с актуальным набором ролей субъекта. Несуществующая роль при
+назначении → `404`; пустые `subject`/`role` → `400`.
+
+### Локальный стенд
+
+Миграция `migrations/0006_seed_iam_admin_demo.sql` засевает роль `iam-admin` с
+правами `(read, iam:global)` и `(write, iam:global)` и выдаёт её `demo-user`,
+поэтому раздел «Роли и доступы» работает при включённом RBAC. Применить миграции
+IDM: `make migrate-idm` (откат: `make migrate-idm GOOSE_CMD=down`).
+
+### Как проверить отказ/успех
+
+- В портале раздел «Роли и доступы» (`/iam`): таблица ролей/прав, список субъектов
+  и форма назначения. У `demo-user` есть права → чтение и assign/revoke проходят.
+- Снять у `demo-user` роль `iam-admin` (или убрать grant `read@iam:global`) →
+  раздел отвечает **403** и скрывает содержимое (fail-closed на UI).
+- После назначения/снятия роли кэш решений по субъекту инвалидируется
+  (`InvalidateSubject`), поэтому новый `CheckAccess` сразу отражает изменение.
+
 ## Конфигурация (env)
 
 | Переменная | Назначение | Дефолт |

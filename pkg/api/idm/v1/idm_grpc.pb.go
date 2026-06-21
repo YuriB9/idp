@@ -291,3 +291,289 @@ var RoleAdminService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "idm/v1/idm.proto",
 }
+
+const (
+	IamAdminService_ListRoles_FullMethodName             = "/idm.v1.IamAdminService/ListRoles"
+	IamAdminService_ListPermissions_FullMethodName       = "/idm.v1.IamAdminService/ListPermissions"
+	IamAdminService_GetRolePermissions_FullMethodName    = "/idm.v1.IamAdminService/GetRolePermissions"
+	IamAdminService_ListSubjectsWithRoles_FullMethodName = "/idm.v1.IamAdminService/ListSubjectsWithRoles"
+	IamAdminService_GetSubjectRoles_FullMethodName       = "/idm.v1.IamAdminService/GetSubjectRoles"
+)
+
+// IamAdminServiceClient is the client API for IamAdminService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// IamAdminService — читающий контракт IAM-админки (ADR-0014): просмотр каталога
+// ролей/прав и привязок субъект↔роль. Только чтение (без побочных эффектов на
+// кэш решений). Путь привилегированный: gateway проверяет право (read,
+// iam:global) перед КАЖДОЙ ручкой (fail-closed). Расширение аддитивно
+// (wire-совместимо): новый сервис и сообщения, существующие RPC не меняются.
+// Мутации привязок выполняет RoleAdminService (переиспользуется, не дублируется).
+type IamAdminServiceClient interface {
+	// ListRoles возвращает все роли каталога (без пагинации — справочник мал).
+	ListRoles(ctx context.Context, in *ListRolesRequest, opts ...grpc.CallOption) (*ListRolesResponse, error)
+	// ListPermissions возвращает все права каталога (без пагинации).
+	ListPermissions(ctx context.Context, in *ListPermissionsRequest, opts ...grpc.CallOption) (*ListPermissionsResponse, error)
+	// GetRolePermissions возвращает права конкретной роли. Несуществующая роль →
+	// NotFound; пустое имя → InvalidArgument.
+	GetRolePermissions(ctx context.Context, in *GetRolePermissionsRequest, opts ...grpc.CallOption) (*GetRolePermissionsResponse, error)
+	// ListSubjectsWithRoles перечисляет субъектов (DISTINCT subject из
+	// subject_roles) с их ролями; keyset-пагинация по subject (ASC). Субъекты без
+	// ролей системе неизвестны и не возвращаются.
+	ListSubjectsWithRoles(ctx context.Context, in *ListSubjectsWithRolesRequest, opts ...grpc.CallOption) (*ListSubjectsWithRolesResponse, error)
+	// GetSubjectRoles возвращает роли субъекта (пустой набор, не NotFound, если
+	// ролей нет); пустой subject → InvalidArgument.
+	GetSubjectRoles(ctx context.Context, in *GetSubjectRolesRequest, opts ...grpc.CallOption) (*GetSubjectRolesResponse, error)
+}
+
+type iamAdminServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewIamAdminServiceClient(cc grpc.ClientConnInterface) IamAdminServiceClient {
+	return &iamAdminServiceClient{cc}
+}
+
+func (c *iamAdminServiceClient) ListRoles(ctx context.Context, in *ListRolesRequest, opts ...grpc.CallOption) (*ListRolesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRolesResponse)
+	err := c.cc.Invoke(ctx, IamAdminService_ListRoles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamAdminServiceClient) ListPermissions(ctx context.Context, in *ListPermissionsRequest, opts ...grpc.CallOption) (*ListPermissionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPermissionsResponse)
+	err := c.cc.Invoke(ctx, IamAdminService_ListPermissions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamAdminServiceClient) GetRolePermissions(ctx context.Context, in *GetRolePermissionsRequest, opts ...grpc.CallOption) (*GetRolePermissionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRolePermissionsResponse)
+	err := c.cc.Invoke(ctx, IamAdminService_GetRolePermissions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamAdminServiceClient) ListSubjectsWithRoles(ctx context.Context, in *ListSubjectsWithRolesRequest, opts ...grpc.CallOption) (*ListSubjectsWithRolesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSubjectsWithRolesResponse)
+	err := c.cc.Invoke(ctx, IamAdminService_ListSubjectsWithRoles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamAdminServiceClient) GetSubjectRoles(ctx context.Context, in *GetSubjectRolesRequest, opts ...grpc.CallOption) (*GetSubjectRolesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSubjectRolesResponse)
+	err := c.cc.Invoke(ctx, IamAdminService_GetSubjectRoles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// IamAdminServiceServer is the server API for IamAdminService service.
+// All implementations must embed UnimplementedIamAdminServiceServer
+// for forward compatibility.
+//
+// IamAdminService — читающий контракт IAM-админки (ADR-0014): просмотр каталога
+// ролей/прав и привязок субъект↔роль. Только чтение (без побочных эффектов на
+// кэш решений). Путь привилегированный: gateway проверяет право (read,
+// iam:global) перед КАЖДОЙ ручкой (fail-closed). Расширение аддитивно
+// (wire-совместимо): новый сервис и сообщения, существующие RPC не меняются.
+// Мутации привязок выполняет RoleAdminService (переиспользуется, не дублируется).
+type IamAdminServiceServer interface {
+	// ListRoles возвращает все роли каталога (без пагинации — справочник мал).
+	ListRoles(context.Context, *ListRolesRequest) (*ListRolesResponse, error)
+	// ListPermissions возвращает все права каталога (без пагинации).
+	ListPermissions(context.Context, *ListPermissionsRequest) (*ListPermissionsResponse, error)
+	// GetRolePermissions возвращает права конкретной роли. Несуществующая роль →
+	// NotFound; пустое имя → InvalidArgument.
+	GetRolePermissions(context.Context, *GetRolePermissionsRequest) (*GetRolePermissionsResponse, error)
+	// ListSubjectsWithRoles перечисляет субъектов (DISTINCT subject из
+	// subject_roles) с их ролями; keyset-пагинация по subject (ASC). Субъекты без
+	// ролей системе неизвестны и не возвращаются.
+	ListSubjectsWithRoles(context.Context, *ListSubjectsWithRolesRequest) (*ListSubjectsWithRolesResponse, error)
+	// GetSubjectRoles возвращает роли субъекта (пустой набор, не NotFound, если
+	// ролей нет); пустой subject → InvalidArgument.
+	GetSubjectRoles(context.Context, *GetSubjectRolesRequest) (*GetSubjectRolesResponse, error)
+	mustEmbedUnimplementedIamAdminServiceServer()
+}
+
+// UnimplementedIamAdminServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedIamAdminServiceServer struct{}
+
+func (UnimplementedIamAdminServiceServer) ListRoles(context.Context, *ListRolesRequest) (*ListRolesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRoles not implemented")
+}
+func (UnimplementedIamAdminServiceServer) ListPermissions(context.Context, *ListPermissionsRequest) (*ListPermissionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPermissions not implemented")
+}
+func (UnimplementedIamAdminServiceServer) GetRolePermissions(context.Context, *GetRolePermissionsRequest) (*GetRolePermissionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRolePermissions not implemented")
+}
+func (UnimplementedIamAdminServiceServer) ListSubjectsWithRoles(context.Context, *ListSubjectsWithRolesRequest) (*ListSubjectsWithRolesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSubjectsWithRoles not implemented")
+}
+func (UnimplementedIamAdminServiceServer) GetSubjectRoles(context.Context, *GetSubjectRolesRequest) (*GetSubjectRolesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSubjectRoles not implemented")
+}
+func (UnimplementedIamAdminServiceServer) mustEmbedUnimplementedIamAdminServiceServer() {}
+func (UnimplementedIamAdminServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeIamAdminServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to IamAdminServiceServer will
+// result in compilation errors.
+type UnsafeIamAdminServiceServer interface {
+	mustEmbedUnimplementedIamAdminServiceServer()
+}
+
+func RegisterIamAdminServiceServer(s grpc.ServiceRegistrar, srv IamAdminServiceServer) {
+	// If the following call panics, it indicates UnimplementedIamAdminServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&IamAdminService_ServiceDesc, srv)
+}
+
+func _IamAdminService_ListRoles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRolesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamAdminServiceServer).ListRoles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamAdminService_ListRoles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamAdminServiceServer).ListRoles(ctx, req.(*ListRolesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamAdminService_ListPermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPermissionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamAdminServiceServer).ListPermissions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamAdminService_ListPermissions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamAdminServiceServer).ListPermissions(ctx, req.(*ListPermissionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamAdminService_GetRolePermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRolePermissionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamAdminServiceServer).GetRolePermissions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamAdminService_GetRolePermissions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamAdminServiceServer).GetRolePermissions(ctx, req.(*GetRolePermissionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamAdminService_ListSubjectsWithRoles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSubjectsWithRolesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamAdminServiceServer).ListSubjectsWithRoles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamAdminService_ListSubjectsWithRoles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamAdminServiceServer).ListSubjectsWithRoles(ctx, req.(*ListSubjectsWithRolesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamAdminService_GetSubjectRoles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSubjectRolesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamAdminServiceServer).GetSubjectRoles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamAdminService_GetSubjectRoles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamAdminServiceServer).GetSubjectRoles(ctx, req.(*GetSubjectRolesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// IamAdminService_ServiceDesc is the grpc.ServiceDesc for IamAdminService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var IamAdminService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "idm.v1.IamAdminService",
+	HandlerType: (*IamAdminServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListRoles",
+			Handler:    _IamAdminService_ListRoles_Handler,
+		},
+		{
+			MethodName: "ListPermissions",
+			Handler:    _IamAdminService_ListPermissions_Handler,
+		},
+		{
+			MethodName: "GetRolePermissions",
+			Handler:    _IamAdminService_GetRolePermissions_Handler,
+		},
+		{
+			MethodName: "ListSubjectsWithRoles",
+			Handler:    _IamAdminService_ListSubjectsWithRoles_Handler,
+		},
+		{
+			MethodName: "GetSubjectRoles",
+			Handler:    _IamAdminService_GetSubjectRoles_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "idm/v1/idm.proto",
+}

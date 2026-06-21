@@ -116,6 +116,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/iam/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Список ролей каталога RBAC
+         * @description Возвращает все роли каталога (read-only). Привилегированная ручка IAM-админки: требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed). Роли/права сидируются миграциями — UI их только показывает (ADR-0014).
+         */
+        get: operations["listRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Список прав каталога RBAC
+         * @description Возвращает все права каталога (read-only). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+         */
+        get: operations["listPermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/roles/{role}/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Права конкретной роли
+         * @description Возвращает права роли (read-only). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed); несуществующая роль → 404.
+         */
+        get: operations["getRolePermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/subjects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Субъекты с их ролями
+         * @description Возвращает страницу субъектов (DISTINCT subject из subject_roles) с их ролями; keyset-пагинация по subject. Субъекты без ролей системе неизвестны и не возвращаются. Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+         */
+        get: operations["listSubjects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/subjects/{subject}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Роли конкретного субъекта
+         * @description Возвращает роли субъекта (пустой набор, не 404, если ролей нет). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+         */
+        get: operations["getSubjectRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/subjects/{subject}/roles/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Назначить роль субъекту
+         * @description Назначает субъекту существующую роль (идемпотентно: повтор → 200). Требует право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль → 404; пустые subject/role → 400. После мутации IDM инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей субъекта (ADR-0014).
+         */
+        post: operations["assignRole"];
+        /**
+         * Снять роль с субъекта
+         * @description Снимает у субъекта роль (идемпотентно: снятие отсутствующей связки → 200). Требует право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed); пустые subject/role → 400. После мутации IDM инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей субъекта.
+         */
+        delete: operations["revokeRole"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -183,6 +307,33 @@ export interface components {
             /** @description Целевой проект-владелец (target), в который переносится сервис. Должен отличаться от исходного проекта; пара (target_project, name) должна быть свободна, иначе 409. */
             target_project: string;
         };
+        Role: {
+            /** @description Имя роли — её стабильный идентификатор (им оперируют assign/revoke); внутренний id наружу не отдаётся (ADR-0014). */
+            name: string;
+        };
+        Permission: {
+            /** @description Действие (например, read, write, create). */
+            action: string;
+            /** @description Целевой ресурс (например, iam:global, project:demo). */
+            resource: string;
+        };
+        RoleList: {
+            roles: components["schemas"]["Role"][];
+        };
+        PermissionList: {
+            permissions: components["schemas"]["Permission"][];
+        };
+        SubjectRoles: {
+            /** @description Идентификатор субъекта (sub из JWT). */
+            subject: string;
+            /** @description Имена ролей субъекта (пусто, если ролей нет). */
+            roles: string[];
+        };
+        SubjectList: {
+            subjects: components["schemas"]["SubjectRoles"][];
+            /** @description Курсор следующей страницы; пустой — конец выборки. */
+            next_page_token: string;
+        };
         Error: {
             /** @description Стабильное сообщение об ошибке для клиента. Внутренние детали (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера. */
             error: string;
@@ -240,6 +391,14 @@ export interface components {
         ProjectPath: string;
         /** @description Имя сервиса внутри проекта. */
         ServiceNamePath: string;
+        /** @description Идентификатор субъекта (sub из JWT). */
+        SubjectPath: string;
+        /** @description Имя роли каталога RBAC. */
+        RolePath: string;
+        /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+        PageSizeQuery: number;
+        /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
+        PageTokenQuery: string;
     };
     requestBodies: never;
     headers: never;
@@ -450,6 +609,179 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["PreconditionFailed"];
+        };
+    };
+    listRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Список ролей */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listPermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Список прав */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getRolePermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Права роли */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionList"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listSubjects: {
+        parameters: {
+            query?: {
+                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+                page_size?: components["parameters"]["PageSizeQuery"];
+                /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
+                page_token?: components["parameters"]["PageTokenQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница субъектов с ролями */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getSubjectRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор субъекта (sub из JWT). */
+                subject: components["parameters"]["SubjectPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Роли субъекта */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectRoles"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    assignRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор субъекта (sub из JWT). */
+                subject: components["parameters"]["SubjectPath"];
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Роль назначена (или уже была назначена) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectRoles"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    revokeRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор субъекта (sub из JWT). */
+                subject: components["parameters"]["SubjectPath"];
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Роль снята (или её и не было) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubjectRoles"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

@@ -21,28 +21,40 @@ import (
 	"github.com/YuriB9/idp/pkg/logger"
 )
 
-// servicesAPI — обработчики ресурса сервисов периметра, держащие gRPC-клиенты
-// каталога проектов и IDM (RBAC). Создаётся один раз в main и навешивается на
-// роутер.
+// servicesAPI — обработчики ресурсов периметра, держащие gRPC-клиенты каталога
+// проектов и IDM. Помимо project-scoped ручек сервисов хостит горизонтальные
+// ручки IAM-админки (см. iam_handlers.go): для них держит клиенты чтения каталога
+// (IamAdmin) и управления ролями (RoleAdmin). Создаётся один раз в main и
+// навешивается на роутер.
 type servicesAPI struct {
-	client projectsv1.ProjectsServiceClient
-	idm    idmv1.AccessServiceClient
-	log    *slog.Logger
+	client    projectsv1.ProjectsServiceClient
+	idm       idmv1.AccessServiceClient
+	iamAdmin  idmv1.IamAdminServiceClient
+	roleAdmin idmv1.RoleAdminServiceClient
+	log       *slog.Logger
 }
 
-// authorize выполняет RBAC-проверку IDM перед доменной операцией периметра.
-// Возвращает true только при явном разрешении. При отказе ИЛИ недоступности/
-// ошибке IDM пишет HTTP 403 (fail-closed) и возвращает false; внутренние
-// детали наружу не раскрываются (только лог). subject берётся из claims
-// (auth.ClaimsFromContext); пустой subject → IDM ответит отказом.
+// authorize выполняет RBAC-проверку IDM перед project-scoped операцией периметра:
+// формирует ресурс "project:<project>" и делегирует в authorizeResource. Тонкая
+// обёртка ради совместимости существующих вызовов (ADR-0014).
 func (a *servicesAPI) authorize(w http.ResponseWriter, r *http.Request, project, action string) bool {
+	return a.authorizeResource(w, r, "project:"+project, action)
+}
+
+// authorizeResource выполняет RBAC-проверку IDM по ПРОИЗВОЛЬНОМУ ресурсу
+// (project-scoped "project:<p>" или горизонтальный "iam:global"). Возвращает true
+// только при явном разрешении. При отказе ИЛИ недоступности/ошибке IDM пишет
+// HTTP 403 (fail-closed) и возвращает false; внутренние детали наружу не
+// раскрываются (только лог). subject берётся из claims (auth.ClaimsFromContext);
+// пустой subject → IDM ответит отказом.
+func (a *servicesAPI) authorizeResource(w http.ResponseWriter, r *http.Request, resource, action string) bool {
 	var subject string
 	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
 		subject = claims.Subject
 	}
 	resp, err := a.idm.CheckAccess(r.Context(), &idmv1.CheckAccessRequest{
 		Subject:  subject,
-		Resource: "project:" + project,
+		Resource: resource,
 		Action:   action,
 	})
 	if err != nil || !resp.GetAllowed() {
@@ -123,6 +135,8 @@ func (a *servicesAPI) register(r chi.Router) {
 	r.Put("/projects/{project}/services/{name}/owners", a.setOwners)
 	r.Post("/projects/{project}/services/{name}/decommission", a.decommission)
 	r.Post("/projects/{project}/services/{name}/transfer", a.transfer)
+	// Горизонтальные (не project-scoped) ручки IAM-админки (см. iam_handlers.go).
+	a.registerIAM(r)
 }
 
 // create — POST /projects/{project}/services: запускает создание сервиса.

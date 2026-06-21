@@ -53,12 +53,15 @@ func run() error {
 	}
 	defer func() { _ = projectsConn.Close() }()
 
-	// IDM-клиент — RBAC CheckAccess перед доменными ручками (fail-closed).
+	// IDM-клиенты — RBAC CheckAccess перед доменными ручками (fail-closed), чтение
+	// каталога IAM-админки (IamAdmin) и управление ролями (RoleAdmin).
 	// Клиент projects — основа REST-ручек периметра.
 	services := &servicesAPI{
-		client: projectsv1.NewProjectsServiceClient(projectsConn),
-		idm:    idmv1.NewAccessServiceClient(idmConn),
-		log:    log,
+		client:    projectsv1.NewProjectsServiceClient(projectsConn),
+		idm:       idmv1.NewAccessServiceClient(idmConn),
+		iamAdmin:  idmv1.NewIamAdminServiceClient(idmConn),
+		roleAdmin: idmv1.NewRoleAdminServiceClient(idmConn),
+		log:       log,
 	}
 
 	router := chi.NewRouter()

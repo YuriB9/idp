@@ -9,6 +9,7 @@ import { DEFAULT_PROJECT, GlobalLayout } from "@/layouts/GlobalLayout";
 import { ServiceListPage } from "@/pages/ServiceListPage";
 import { CreateServicePage } from "@/pages/CreateServicePage";
 import { ServiceProgressPage } from "@/pages/ServiceProgressPage";
+import { IamPage } from "@/pages/IamPage";
 
 export function App() {
   return (
@@ -18,6 +19,8 @@ export function App() {
         <Route path="/projects/:project/services" element={<ServiceListPage />} />
         <Route path="/projects/:project/services/new" element={<CreateServicePage />} />
         <Route path="/projects/:project/services/:name" element={<ServiceProgressPage />} />
+        {/* Горизонтальный (не project-scoped) раздел IAM-админки */}
+        <Route path="/iam" element={<IamPage />} />
         <Route path="*" element={<p className="text-muted-foreground">Страница не найдена</p>} />
       </Route>
     </Routes>

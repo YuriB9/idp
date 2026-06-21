@@ -8,10 +8,13 @@ TOOLS_BIN := $(CURDIR)/tools/bin
 # DSN каталога проектов для миграций; переопределяется из окружения.
 PROJECTS_DSN ?= postgres://projects:projects@localhost:5432/projects?sslmode=disable
 PROJECTS_MIGRATIONS := $(CURDIR)/services/projects/migrations
+# DSN сервиса IDM для миграций (роли/права RBAC); переопределяется из окружения.
+IDM_DSN ?= postgres://idm:idm@localhost:5433/idm?sslmode=disable
+IDM_MIGRATIONS := $(CURDIR)/services/idm/migrations
 # GOOSE_CMD — команда goose (up|down|status|...).
 GOOSE_CMD ?= up
 
-.PHONY: tools proto openapi gen test lint tidy tidy-check migrate-projects
+.PHONY: tools proto openapi gen test lint tidy tidy-check migrate-projects migrate-idm
 
 ## tools: собрать пинованные инструменты кодогена в tools/bin
 tools:
@@ -24,6 +27,11 @@ tools:
 ## Использование: make migrate-projects [GOOSE_CMD=up|down|status] [PROJECTS_DSN=...]
 migrate-projects: tools
 	$(TOOLS_BIN)/goose -dir $(PROJECTS_MIGRATIONS) postgres "$(PROJECTS_DSN)" $(GOOSE_CMD)
+
+## migrate-idm: применить миграции RBAC сервиса IDM (goose, GOWORK=off).
+## Использование: make migrate-idm [GOOSE_CMD=up|down|status] [IDM_DSN=...]
+migrate-idm: tools
+	$(TOOLS_BIN)/goose -dir $(IDM_MIGRATIONS) postgres "$(IDM_DSN)" $(GOOSE_CMD)
 
 ## proto: сгенерировать Go-стабы из .proto
 proto: tools
