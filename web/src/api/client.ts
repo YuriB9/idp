@@ -44,6 +44,20 @@ const SetServiceOwnersResult = z
 const TransferServiceRequest = z
   .object({ target_project: z.string().min(1) })
   .passthrough();
+const Role = z.object({ name: z.string() }).passthrough();
+const RoleList = z.object({ roles: z.array(Role) }).passthrough();
+const Permission = z
+  .object({ action: z.string(), resource: z.string() })
+  .passthrough();
+const PermissionList = z
+  .object({ permissions: z.array(Permission) })
+  .passthrough();
+const SubjectRoles = z
+  .object({ subject: z.string(), roles: z.array(z.string()) })
+  .passthrough();
+const SubjectList = z
+  .object({ subjects: z.array(SubjectRoles), next_page_token: z.string() })
+  .passthrough();
 
 export const schemas = {
   HealthStatus,
@@ -57,6 +71,12 @@ export const schemas = {
   SetServiceOwnersRequest,
   SetServiceOwnersResult,
   TransferServiceRequest,
+  Role,
+  RoleList,
+  Permission,
+  PermissionList,
+  SubjectRoles,
+  SubjectList,
 };
 
 const endpoints = makeApi([
@@ -66,6 +86,193 @@ const endpoints = makeApi([
     alias: "getHealth",
     requestFormat: "json",
     response: HealthStatus,
+  },
+  {
+    method: "get",
+    path: "/iam/permissions",
+    alias: "listPermissions",
+    description: `Возвращает все права каталога (read-only). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+`,
+    requestFormat: "json",
+    response: PermissionList,
+    errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/iam/roles",
+    alias: "listRoles",
+    description: `Возвращает все роли каталога (read-only). Привилегированная ручка IAM-админки: требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed). Роли/права сидируются миграциями — UI их только показывает (ADR-0014).
+`,
+    requestFormat: "json",
+    response: RoleList,
+    errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/iam/roles/:role/permissions",
+    alias: "getRolePermissions",
+    description: `Возвращает права роли (read-only). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed); несуществующая роль → 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: PermissionList,
+    errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/iam/subjects",
+    alias: "listSubjects",
+    description: `Возвращает страницу субъектов (DISTINCT subject из subject_roles) с их ролями; keyset-пагинация по subject. Субъекты без ролей системе неизвестны и не возвращаются. Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "page_size",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "page_token",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: SubjectList,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/iam/subjects/:subject/roles",
+    alias: "getSubjectRoles",
+    description: `Возвращает роли субъекта (пустой набор, не 404, если ролей нет). Требует право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "subject",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: SubjectRoles,
+    errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/iam/subjects/:subject/roles/:role",
+    alias: "assignRole",
+    description: `Назначает субъекту существующую роль (идемпотентно: повтор → 200). Требует право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль → 404; пустые subject/role → 400. После мутации IDM инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей субъекта (ADR-0014).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "subject",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: SubjectRoles,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/iam/subjects/:subject/roles/:role",
+    alias: "revokeRole",
+    description: `Снимает у субъекта роль (идемпотентно: снятие отсутствующей связки → 200). Требует право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed); пустые subject/role → 400. После мутации IDM инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей субъекта.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "subject",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: SubjectRoles,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
   },
   {
     method: "get",

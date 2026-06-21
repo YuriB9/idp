@@ -4,11 +4,7 @@ info:
   version: 0.3.0
   description: >
     Контракт периметра (портал ↔ API-шлюз) платформы IDP. Источник правды для
-    кодогена TS-клиента и zod-схем (ADR-0002, ADR-0009, docs/IDP_MVP_plan.md,
-    Этап 1 и Этап 3). Доменные операции сценария «Создание сервиса» — поверх
-    gRPC-контракта projectsv1 (CreateService/GetService/ListServices).
-    BREAKING относительно версии 0.1.0: каркасный `GET /services` заменён
-    проектно-скоупленным ресурсом `GET /projects/{project}/services`.
+    кодогена TS-клиента и zod-схем.
 servers:
   - url: /api
 paths:
@@ -207,6 +203,149 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/PreconditionFailed"
+  /iam/roles:
+    get:
+      operationId: listRoles
+      summary: Список ролей каталога RBAC
+      description: >
+        Возвращает все роли каталога (read-only). Привилегированная ручка
+        IAM-админки: требует право (read, iam:global); отказ/недоступность IDM →
+        403 (fail-closed). Роли/права сидируются миграциями — UI их только
+        показывает (ADR-0014).
+      responses:
+        "200":
+          description: Список ролей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/permissions:
+    get:
+      operationId: listPermissions
+      summary: Список прав каталога RBAC
+      description: >
+        Возвращает все права каталога (read-only). Требует право (read,
+        iam:global); отказ/недоступность IDM → 403 (fail-closed).
+      responses:
+        "200":
+          description: Список прав
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/roles/{role}/permissions:
+    get:
+      operationId: getRolePermissions
+      summary: Права конкретной роли
+      description: >
+        Возвращает права роли (read-only). Требует право (read, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed); несуществующая роль → 404.
+      parameters:
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Права роли
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /iam/subjects:
+    get:
+      operationId: listSubjects
+      summary: Субъекты с их ролями
+      description: >
+        Возвращает страницу субъектов (DISTINCT subject из subject_roles) с их
+        ролями; keyset-пагинация по subject. Субъекты без ролей системе
+        неизвестны и не возвращаются. Требует право (read, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed).
+      parameters:
+        - $ref: "#/components/parameters/PageSizeQuery"
+        - $ref: "#/components/parameters/PageTokenQuery"
+      responses:
+        "200":
+          description: Страница субъектов с ролями
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/subjects/{subject}/roles:
+    get:
+      operationId: getSubjectRoles
+      summary: Роли конкретного субъекта
+      description: >
+        Возвращает роли субъекта (пустой набор, не 404, если ролей нет). Требует
+        право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+      responses:
+        "200":
+          description: Роли субъекта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/subjects/{subject}/roles/{role}:
+    post:
+      operationId: assignRole
+      summary: Назначить роль субъекту
+      description: >
+        Назначает субъекту существующую роль (идемпотентно: повтор → 200). Требует
+        право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+        Несуществующая роль → 404; пустые subject/role → 400. После мутации IDM
+        инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей
+        субъекта (ADR-0014).
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Роль назначена (или уже была назначена)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: revokeRole
+      summary: Снять роль с субъекта
+      description: >
+        Снимает у субъекта роль (идемпотентно: снятие отсутствующей связки → 200).
+        Требует право (write, iam:global); отказ/недоступность IDM → 403
+        (fail-closed); пустые subject/role → 400. После мутации IDM инвалидирует
+        кэш решений по субъекту. Ответ — актуальный набор ролей субъекта.
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Роль снята (или её и не было)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 components:
   parameters:
     ProjectPath:
@@ -225,6 +364,41 @@ components:
       schema:
         type: string
         minLength: 1
+    SubjectPath:
+      name: subject
+      in: path
+      required: true
+      description: Идентификатор субъекта (sub из JWT).
+      schema:
+        type: string
+        minLength: 1
+    RolePath:
+      name: role
+      in: path
+      required: true
+      description: Имя роли каталога RBAC.
+      schema:
+        type: string
+        minLength: 1
+    PageSizeQuery:
+      name: page_size
+      in: query
+      required: false
+      description: >
+        Желаемый размер страницы; сервер клампит к допустимому пределу.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+    PageTokenQuery:
+      name: page_token
+      in: query
+      required: false
+      description: >
+        Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала
+        выборки.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: Некорректный запрос (валидация входных данных)
@@ -372,6 +546,64 @@ components:
             Целевой проект-владелец (target), в который переносится сервис. Должен
             отличаться от исходного проекта; пара (target_project, name) должна
             быть свободна, иначе 409.
+    Role:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >
+            Имя роли — её стабильный идентификатор (им оперируют assign/revoke);
+            внутренний id наружу не отдаётся (ADR-0014).
+    Permission:
+      type: object
+      required: [action, resource]
+      properties:
+        action:
+          type: string
+          description: Действие (например, read, write, create).
+        resource:
+          type: string
+          description: Целевой ресурс (например, iam:global, project:demo).
+    RoleList:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Role"
+    PermissionList:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Permission"
+    SubjectRoles:
+      type: object
+      required: [subject, roles]
+      properties:
+        subject:
+          type: string
+          description: Идентификатор субъекта (sub из JWT).
+        roles:
+          type: array
+          description: Имена ролей субъекта (пусто, если ролей нет).
+          items:
+            type: string
+    SubjectList:
+      type: object
+      required: [subjects, next_page_token]
+      properties:
+        subjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubjectRoles"
+        next_page_token:
+          type: string
+          description: Курсор следующей страницы; пустой — конец выборки.
     Error:
       type: object
       required: [error]

@@ -156,6 +156,9 @@ func run() error {
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{auth: authz, log: log})
 	idmv1.RegisterRoleAdminServiceServer(grpcSrv, &roleAdminServer{roles: roles, log: log})
+	// Читающий каталог IAM-админки (ADR-0014): repo как catalogReader, только
+	// чтение (без побочных эффектов на кэш решений).
+	idmv1.RegisterIamAdminServiceServer(grpcSrv, &iamAdminServer{catalog: repo, log: log})
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {

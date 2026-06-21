@@ -1,6 +1,6 @@
 // Глобальный каркас портала: боковая навигация + шапка. Единый визуальный язык
 // с остальными фронтендами платформы (zinc/Geist, sidebar + header).
-import { Boxes, Layers, ServerCog } from "lucide-react";
+import { Boxes, Layers, ServerCog, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
@@ -31,6 +31,10 @@ export function GlobalLayout() {
           <NavLink to={`/projects/${project}/services`} className={navLinkClass} end>
             <Layers className="size-4" />
             Сервисы
+          </NavLink>
+          <NavLink to="/iam" className={navLinkClass}>
+            <ShieldCheck className="size-4" />
+            Роли и доступы
           </NavLink>
         </nav>
         <div className="mt-auto p-3 text-xs text-muted-foreground">
