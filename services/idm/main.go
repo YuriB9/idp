@@ -29,6 +29,7 @@ import (
 	"github.com/YuriB9/idp/pkg/httpserver"
 	"github.com/YuriB9/idp/pkg/logger"
 	"github.com/YuriB9/idp/services/idm/internal/cache"
+	"github.com/YuriB9/idp/services/idm/internal/identity"
 	"github.com/YuriB9/idp/services/idm/internal/repository"
 	"github.com/YuriB9/idp/services/idm/internal/usecase"
 )
@@ -157,6 +158,29 @@ func run() error {
 	// удаление роли затрагивает всех носителей роли.
 	catalogMgr := usecase.NewCatalogManager(repo, decisionCache)
 
+	// Справочник субъектов из каталога Keycloak (ADR-0016): клиент Admin REST под
+	// SSRF-guard + ОТДЕЛЬНЫЙ кэш идентичностей (TTL), не трогающий decision-cache.
+	// SSRF-guard включён всегда, кроме локалки (SSRF_DISABLED — приватный keycloak).
+	ssrfDisabled, err := config.Bool("SSRF_DISABLED", false)
+	if err != nil {
+		return err
+	}
+	identityTTL, err := config.Duration("IDM_IDENTITY_CACHE_TTL", 5*time.Minute)
+	if err != nil {
+		return err
+	}
+	kcClient, err := identity.NewKeycloakClient(identity.Config{
+		BaseURL:      config.String("KEYCLOAK_BASE_URL", "http://keycloak:8080"),
+		Realm:        config.String("KEYCLOAK_REALM", "idp"),
+		ClientID:     config.String("KEYCLOAK_SA_CLIENT_ID", "idm-service-account"),
+		ClientSecret: config.String("KEYCLOAK_SA_CLIENT_SECRET", ""),
+		Guarded:      !ssrfDisabled,
+	})
+	if err != nil {
+		return err
+	}
+	dir := identity.NewDirectory(kcClient, identity.NewCache(rdb, identityTTL))
+
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{auth: authz, log: log})
 	idmv1.RegisterRoleAdminServiceServer(grpcSrv, &roleAdminServer{roles: roles, log: log})
@@ -166,6 +190,9 @@ func run() error {
 	// Мутирующий каталог IAM (ADR-0015): структурные правки ролей/прав под широкой
 	// инвалидацией кэша; системные роли/права защищены от изменения.
 	idmv1.RegisterIamCatalogServiceServer(grpcSrv, &iamCatalogServer{catalog: catalogMgr, log: log})
+	// Справочник субъектов (ADR-0016): чтение каталога Keycloak; недоступность →
+	// Unavailable (деградация), не влияет на decision-cache RBAC.
+	idmv1.RegisterIdentityServiceServer(grpcSrv, &identityServer{dir: dir, log: log})
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {

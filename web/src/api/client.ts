@@ -61,11 +61,34 @@ const AttachPermissionRequest = z
 const RolePermissions = z
   .object({ role: z.string(), permissions: z.array(Permission) })
   .passthrough();
+const SubjectIdentity = z
+  .object({
+    subject: z.string(),
+    username: z.string(),
+    email: z.string(),
+    display_name: z.string(),
+    enabled: z.boolean(),
+    found: z.boolean(),
+  })
+  .passthrough();
 const SubjectRoles = z
-  .object({ subject: z.string(), roles: z.array(z.string()) })
+  .object({
+    subject: z.string(),
+    roles: z.array(z.string()),
+    identity: SubjectIdentity.optional(),
+  })
   .passthrough();
 const SubjectList = z
   .object({ subjects: z.array(SubjectRoles), next_page_token: z.string() })
+  .passthrough();
+const DirectorySubjectList = z
+  .object({ subjects: z.array(SubjectIdentity), next_cursor: z.string() })
+  .passthrough();
+const ResolveSubjectsRequest = z
+  .object({ subjects: z.array(z.string()) })
+  .passthrough();
+const DirectorySubjectResolveResult = z
+  .object({ subjects: z.array(SubjectIdentity) })
   .passthrough();
 
 export const schemas = {
@@ -87,11 +110,93 @@ export const schemas = {
   CreatePermissionRequest,
   AttachPermissionRequest,
   RolePermissions,
+  SubjectIdentity,
   SubjectRoles,
   SubjectList,
+  DirectorySubjectList,
+  ResolveSubjectsRequest,
+  DirectorySubjectResolveResult,
 };
 
 const endpoints = makeApi([
+  {
+    method: "get",
+    path: "/iam/directory/subjects",
+    alias: "searchDirectorySubjects",
+    description: `Ищет пользователей realm Keycloak по строке (username/email/имя) с постраничной выдачей (непрозрачный курсор поверх offset Keycloak). Используется пикером назначения роли (ADR-0016). Требует ОТДЕЛЬНОЕ право (read, iam:directory) — просмотр PII; отказ/недоступность IDM → 403 (fail-closed). Пустой search или некорректный page_size/cursor → 400. Каталог Keycloak недоступен → 503 (деградация, retryable). Внутренние ошибки наружу не раскрываются.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "search",
+        type: "Query",
+        schema: z.string(),
+      },
+      {
+        name: "cursor",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "page_size",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(2147483647).optional(),
+      },
+    ],
+    response: DirectorySubjectList,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 503,
+        description: `Внешняя зависимость временно недоступна (каталог идентичностей Keycloak). Справочник субъектов деградирует, не ломая управление ролями по сырому subject (ADR-0016); запрос можно повторить позже.
+`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/iam/directory/subjects/resolve",
+    alias: "resolveDirectorySubjects",
+    description: `Резолвит набор канонических ключей (sub) в идентичности (username/email/display name) из каталога Keycloak (ADR-0016). Отсутствующие в каталоге субъекты возвращаются с found&#x3D;false (не опускаются) — «осиротевшие». Требует право (read, iam:directory); отказ/недоступность IDM → 403 (fail-closed). Пустой список → 400; каталог Keycloak недоступен → 503 (деградация). Внутренние ошибки наружу не раскрываются.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ResolveSubjectsRequest,
+      },
+    ],
+    response: DirectorySubjectResolveResult,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 503,
+        description: `Внешняя зависимость временно недоступна (каталог идентичностей Keycloak). Справочник субъектов деградирует, не ломая управление ролями по сырому subject (ADR-0016); запрос можно повторить позже.
+`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
   {
     method: "get",
     path: "/iam/permissions",

@@ -104,7 +104,10 @@ func newIAMRouter(idm idmv1.AccessServiceClient, iamAdmin idmv1.IamAdminServiceC
 		idm:       idm,
 		iamAdmin:  iamAdmin,
 		roleAdmin: roleAdmin,
-		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// Справочник субъектов по умолчанию пуст: обогащение GET /iam/subjects
+		// (ADR-0016) ничего не добавляет, существующие тесты остаются «сырыми».
+		identity: &stubIdentityClient{},
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	r := chi.NewRouter()
 	api.register(r)

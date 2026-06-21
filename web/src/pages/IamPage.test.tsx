@@ -24,6 +24,7 @@ const {
   deletePermission,
   attachPermission,
   detachPermission,
+  searchDirectorySubjects,
 } = vi.hoisted(() => ({
   listRoles: vi.fn(),
   listPermissions: vi.fn(),
@@ -37,6 +38,7 @@ const {
   deletePermission: vi.fn(),
   attachPermission: vi.fn(),
   detachPermission: vi.fn(),
+  searchDirectorySubjects: vi.fn(),
 }));
 vi.mock("@/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api")>();
@@ -55,6 +57,7 @@ vi.mock("@/api", async (importOriginal) => {
       deletePermission,
       attachPermission,
       detachPermission,
+      searchDirectorySubjects,
     },
   };
 });
@@ -111,25 +114,40 @@ describe("IamPage", () => {
     expect(screen.queryByText("iam-admin")).not.toBeInTheDocument();
   });
 
-  it("назначение роли → вызов периметра", async () => {
+  it("назначение роли → вызов периметра (выбор пользователя из каталога)", async () => {
     listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
-    assignRole.mockResolvedValue({ subject: "alice", roles: ["iam-admin"] });
+    searchDirectorySubjects.mockResolvedValue({
+      subjects: [
+        {
+          subject: "alice-sub",
+          username: "alice",
+          email: "alice@example.com",
+          display_name: "Alice Ivanova",
+          enabled: true,
+          found: true,
+        },
+      ],
+      next_cursor: "",
+    });
+    assignRole.mockResolvedValue({ subject: "alice-sub", roles: ["iam-admin"] });
 
     const user = userEvent.setup();
     renderPage();
 
     await screen.findByRole("button", { name: "iam-admin" });
-    await user.type(screen.getByLabelText(/^Субъект/i), "alice");
+    await user.type(screen.getByLabelText(/Поиск пользователя/i), "alice");
+    await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
+    await user.click(await screen.findByText("Alice Ivanova"));
     await user.selectOptions(screen.getByLabelText(/^Роль/i), "iam-admin");
     await user.click(screen.getByRole("button", { name: /Назначить/i }));
 
     await waitFor(() => expect(assignRole).toHaveBeenCalledTimes(1));
     expect(assignRole).toHaveBeenCalledWith(undefined, {
-      params: { subject: "alice", role: "iam-admin" },
+      params: { subject: "alice-sub", role: "iam-admin" },
     });
   });
 
-  it("валидация формы: пустой субъект → запрос не уходит", async () => {
+  it("валидация формы: пользователь не выбран → запрос не уходит", async () => {
     listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
 
     const user = userEvent.setup();
@@ -138,7 +156,7 @@ describe("IamPage", () => {
     await screen.findByRole("button", { name: "iam-admin" });
     await user.click(screen.getByRole("button", { name: /Назначить/i }));
 
-    expect(await screen.findByText(/Укажите субъекта/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Выберите пользователя/i)).toBeInTheDocument();
     expect(assignRole).not.toHaveBeenCalled();
   });
 
@@ -238,5 +256,134 @@ describe("IamPage", () => {
     expect(await screen.findByText(/состав прав системной роли фиксирован/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Прикрепить право/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Открепить право/i)).not.toBeInTheDocument();
+  });
+
+  it("пикер: поиск с debounce, выбор подставляет канонический subject", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
+    searchDirectorySubjects.mockResolvedValue({
+      subjects: [
+        {
+          subject: "11111111-1111-1111-1111-111111111111",
+          username: "dev",
+          email: "dev@example.com",
+          display_name: "Dev User",
+          enabled: true,
+          found: true,
+        },
+      ],
+      next_cursor: "",
+    });
+    assignRole.mockResolvedValue({ subject: "11111111-1111-1111-1111-111111111111", roles: ["iam-admin"] });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole("button", { name: "iam-admin" });
+    await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
+
+    // Debounce: после задержки уходит запрос и появляется результат.
+    await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
+    await user.click(await screen.findByText("Dev User"));
+
+    // После выбора поле поиска заменяется чипом выбранного пользователя.
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/Поиск пользователя/i)).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Dev User")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText(/^Роль/i), "iam-admin");
+    await user.click(screen.getByRole("button", { name: /Назначить/i }));
+    await waitFor(() => expect(assignRole).toHaveBeenCalledTimes(1));
+    expect(assignRole).toHaveBeenCalledWith(undefined, {
+      params: { subject: "11111111-1111-1111-1111-111111111111", role: "iam-admin" },
+    });
+  });
+
+  it("список субъектов: показывает имя/почту обогащённого субъекта", async () => {
+    listRoles.mockResolvedValue({ roles: [] });
+    listSubjects.mockResolvedValue({
+      subjects: [
+        {
+          subject: "11111111-1111-1111-1111-111111111111",
+          roles: ["iam-admin"],
+          identity: {
+            subject: "11111111-1111-1111-1111-111111111111",
+            username: "dev",
+            email: "dev@example.com",
+            display_name: "Dev User",
+            enabled: true,
+            found: true,
+          },
+        },
+      ],
+      next_page_token: "",
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Dev User")).toBeInTheDocument();
+    expect(screen.getByText("dev@example.com")).toBeInTheDocument();
+  });
+
+  it("осиротевший субъект: помечен «нет в каталоге»", async () => {
+    listRoles.mockResolvedValue({ roles: [] });
+    listSubjects.mockResolvedValue({
+      subjects: [
+        {
+          subject: "orphan-sub",
+          roles: ["viewer"],
+          identity: {
+            subject: "orphan-sub",
+            username: "",
+            email: "",
+            display_name: "",
+            enabled: false,
+            found: false,
+          },
+        },
+      ],
+      next_page_token: "",
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("orphan-sub")).toBeInTheDocument();
+    expect(screen.getByText(/нет в каталоге/i)).toBeInTheDocument();
+  });
+
+  it("нет права на справочник (403): пикер скрыт, показан отказ", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
+    searchDirectorySubjects.mockRejectedValue(httpError(403));
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole("button", { name: "iam-admin" });
+    // Провоцируем запрос к справочнику, чтобы получить 403.
+    expect(screen.getByLabelText(/Поиск пользователя/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
+    await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
+
+    // После 403 пикер скрывается, показывается отказ доступа к каталогу.
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/Поиск пользователя/i)).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Нет доступа к каталогу пользователей/i)).toBeInTheDocument();
+  });
+
+  it("каталог недоступен (503): показана индикация, поиск остаётся", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
+    searchDirectorySubjects.mockRejectedValue(httpError(503));
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole("button", { name: "iam-admin" });
+    await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
+    await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
+
+    expect(await screen.findByText(/Каталог недоступен/i)).toBeInTheDocument();
+    // Поле поиска остаётся (503 ретраебелен), пикер не превращается в отказ.
+    expect(screen.getByLabelText(/Поиск пользователя/i)).toBeInTheDocument();
   });
 });

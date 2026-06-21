@@ -159,9 +159,10 @@ services:
       # отключаем явным флагом (единственный разрешённый способ). В проде —
       # реальный JWKS_URL (https), fail-closed.
       AUTH_DISABLED: "true"
-      # Субъект для disabled-режима: совпадает с засеянной демо-ролью IDM
-      # (subject_roles.subject), чтобы RBAC разрешал demo-user create в project:demo.
-      AUTH_DISABLED_SUBJECT: "demo-user"
+      # Канонический ключ субъекта (ADR-0016) — это sub (UUID) пользователя dev из
+      # realm-файла Keycloak. В disabled-режиме кладём тот же UUID, что выдаст
+      # реальный вход через Keycloak; сиды RBAC мигрированы на него (0009).
+      AUTH_DISABLED_SUBJECT: "11111111-1111-1111-1111-111111111111"
     restart: unless-stopped
     depends_on:
       - idm
@@ -196,6 +197,16 @@ services:
       AUTH_DISABLED: "true"
       PG_DSN: "postgres://idm:idm@postgres-idm:5432/idm?sslmode=disable"
       REDIS_ADDR: "dragonfly:6379"
+      # Справочник субъектов из каталога Keycloak (ADR-0016): сервис-аккаунт для
+      # ЧТЕНИЯ пользователей realm через Admin REST. Креды — из realm-файла
+      # (deploy/keycloak/idp-realm.json). SSRF_DISABLED=true только локально
+      # (адрес keycloak приватный, http); в проде — https + SSRF-guard.
+      KEYCLOAK_BASE_URL: "http://keycloak:8080"
+      KEYCLOAK_REALM: "idp"
+      KEYCLOAK_SA_CLIENT_ID: "idm-service-account"
+      KEYCLOAK_SA_CLIENT_SECRET: "idm-service-account-secret"
+      IDM_IDENTITY_CACHE_TTL: "5m"
+      SSRF_DISABLED: "true"
     restart: unless-stopped
     depends_on:
       postgres-idm:
@@ -204,6 +215,8 @@ services:
         condition: service_started
       migrate-idm:
         condition: service_completed_successfully
+      keycloak:
+        condition: service_started
 
   # Одноразовый мигратор: применяет схему RBAC (роли/права/связи/привязки) и
   # локальный seed демо-ролей к postgres-idm до старта idm. Завершается с кодом 0.
@@ -239,9 +252,10 @@ services:
       GRPC_ADDR: ":9090"
       HTTP_ADDR: ":8082"
       AUTH_DISABLED: "true"
-      # Субъект для disabled-режима: RBAC CheckAccess (defense-in-depth перед
-      # CreateService) видит demo-user, как и засеяно в IDM.
-      AUTH_DISABLED_SUBJECT: "demo-user"
+      # Субъект для disabled-режима: канонический sub (UUID) пользователя dev
+      # (ADR-0016) — RBAC CheckAccess (defense-in-depth перед CreateService) видит
+      # тот же субъект, на который мигрированы сиды IDM (0009).
+      AUTH_DISABLED_SUBJECT: "11111111-1111-1111-1111-111111111111"
       IDM_GRPC_ADDR: "idm:9090"
       PG_DSN: "postgres://projects:projects@postgres-projects:5432/projects?sslmode=disable"
       TEMPORAL_HOSTPORT: "temporal:7233"

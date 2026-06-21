@@ -529,6 +529,76 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /iam/directory/subjects:
+    get:
+      operationId: searchDirectorySubjects
+      summary: Поиск пользователей в каталоге идентичностей
+      description: >
+        Ищет пользователей realm Keycloak по строке (username/email/имя) с
+        постраничной выдачей (непрозрачный курсор поверх offset Keycloak).
+        Используется пикером назначения роли (ADR-0016). Требует ОТДЕЛЬНОЕ право
+        (read, iam:directory) — просмотр PII; отказ/недоступность IDM → 403
+        (fail-closed). Пустой search или некорректный page_size/cursor → 400.
+        Каталог Keycloak недоступен → 503 (деградация, retryable). Внутренние
+        ошибки наружу не раскрываются.
+      parameters:
+        - name: search
+          in: query
+          required: true
+          description: Строка поиска (username/email/имя); непустая.
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          description: Непрозрачный курсор страницы (пусто — первая страница).
+          schema:
+            type: string
+        - $ref: "#/components/parameters/PageSizeQuery"
+      responses:
+        "200":
+          description: Страница найденных пользователей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectorySubjectList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /iam/directory/subjects/resolve:
+    post:
+      operationId: resolveDirectorySubjects
+      summary: Батч-резолв субъектов в идентичности
+      description: >
+        Резолвит набор канонических ключей (sub) в идентичности
+        (username/email/display name) из каталога Keycloak (ADR-0016).
+        Отсутствующие в каталоге субъекты возвращаются с found=false (не
+        опускаются) — «осиротевшие». Требует право (read, iam:directory);
+        отказ/недоступность IDM → 403 (fail-closed). Пустой список → 400; каталог
+        Keycloak недоступен → 503 (деградация). Внутренние ошибки наружу не
+        раскрываются.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveSubjectsRequest"
+      responses:
+        "200":
+          description: Идентичности запрошенных субъектов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectorySubjectResolveResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 components:
   parameters:
     ProjectPath:
@@ -629,6 +699,15 @@ components:
       description: >
         Предусловие операции не выполнено (например, нагрузка не снята из K8s или
         недопустимый исходный статус сервиса).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: >
+        Внешняя зависимость временно недоступна (каталог идентичностей Keycloak).
+        Справочник субъектов деградирует, не ломая управление ролями по сырому
+        subject (ADR-0016); запрос можно повторить позже.
       content:
         application/json:
           schema:
@@ -836,10 +915,76 @@ components:
       properties:
         subject:
           type: string
-          description: Идентификатор субъекта (sub из JWT).
+          description: Канонический ключ субъекта (sub из JWT, UUID Keycloak).
         roles:
           type: array
           description: Имена ролей субъекта (пусто, если ролей нет).
+          items:
+            type: string
+        identity:
+          allOf:
+            - $ref: "#/components/schemas/SubjectIdentity"
+          description: >
+            Опциональная идентичность субъекта из каталога Keycloak (ADR-0016).
+            Присутствует ТОЛЬКО при обогащении: вызывающий держит право
+            (read, iam:directory) и каталог доступен. Отсутствует, если права нет
+            (PII не раскрывается) или Keycloak недоступен (деградация). Для
+            «осиротевшего» субъекта присутствует с found=false.
+    SubjectIdentity:
+      type: object
+      required: [subject, username, email, display_name, enabled, found]
+      properties:
+        subject:
+          type: string
+          description: Канонический ключ субъекта (sub = UUID Keycloak).
+        username:
+          type: string
+          description: Имя входа (preferred_username); ключом авторизации НЕ является.
+        email:
+          type: string
+          description: Адрес электронной почты пользователя.
+        display_name:
+          type: string
+          description: Отображаемое имя (имя + фамилия), если задано.
+        enabled:
+          type: boolean
+          description: Активен ли пользователь в realm.
+        found:
+          type: boolean
+          description: >
+            Найден ли субъект в каталоге. false → «осиротевший»: роль есть, в
+            каталоге Keycloak его нет.
+    DirectorySubjectList:
+      type: object
+      required: [subjects, next_cursor]
+      properties:
+        subjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubjectIdentity"
+        next_cursor:
+          type: string
+          description: >
+            Непрозрачный курсор следующей страницы (поверх offset Keycloak);
+            пустой — страниц больше нет.
+    DirectorySubjectResolveResult:
+      type: object
+      required: [subjects]
+      properties:
+        subjects:
+          type: array
+          description: >
+            Идентичности в составе запрошенных ключей; отсутствующие в каталоге —
+            с found=false (не опускаются).
+          items:
+            $ref: "#/components/schemas/SubjectIdentity"
+    ResolveSubjectsRequest:
+      type: object
+      required: [subjects]
+      properties:
+        subjects:
+          type: array
+          description: Канонические ключи (sub) для резолва (непустой список).
           items:
             type: string
     SubjectList:

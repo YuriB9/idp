@@ -85,6 +85,74 @@ service IamCatalogService {
   rpc DetachPermission(DetachPermissionRequest) returns (DetachPermissionResponse);
 }
 
+// IdentityService — читающий контракт справочника субъектов из каталога
+// идентичностей (OIDC/Keycloak, ADR-0016). Резолвит канонический ключ субъекта
+// (sub из JWT, он же subject_roles.subject) в человекочитаемую идентичность
+// (username/email/display name) и ищет пользователей realm для пикера назначения
+// роли. Источник правды — живой запрос в Keycloak Admin REST + кэш с TTL
+// (ОТДЕЛЬНЫЙ от кэша решений RBAC). Путь привилегированный: gateway проверяет
+// право (read, iam:directory) перед КАЖДОЙ ручкой (fail-closed). Справочник НЕ
+// критичен для CheckAccess (решение по sub не зависит от имён): при недоступном
+// Keycloak ручки деградируют (Unavailable), управление ролями по сырому subject
+// не ломается. Расширение аддитивно (wire-совместимо): новый сервис и сообщения,
+// существующие RPC не меняются.
+service IdentityService {
+  // SearchSubjects ищет пользователей каталога по строке (username/email/имя) с
+  // постраничной выдачей. Пустой/слишком короткий query или превышение лимита
+  // page_size → InvalidArgument; недоступность Keycloak → Unavailable.
+  rpc SearchSubjects(SearchSubjectsRequest) returns (SearchSubjectsResponse);
+  // ResolveSubjects резолвит набор канонических ключей (sub) в идентичности
+  // (батч). Отсутствующий в каталоге субъект возвращается с found=false (не
+  // опускается) — «осиротевший». Пустой список → InvalidArgument; недоступность
+  // Keycloak → Unavailable.
+  rpc ResolveSubjects(ResolveSubjectsRequest) returns (ResolveSubjectsResponse);
+}
+
+// SubjectIdentity — идентичность субъекта из каталога Keycloak.
+message SubjectIdentity {
+  // subject — канонический ключ субъекта = sub (UUID Keycloak); тот же, что в
+  // subject_roles.subject и auth.Claims.Subject.
+  string subject = 1;
+  // username — имя входа (preferred_username); ключом авторизации НЕ является.
+  string username = 2;
+  // email — адрес электронной почты пользователя.
+  string email = 3;
+  // display_name — отображаемое имя (имя + фамилия), если задано.
+  string display_name = 4;
+  // enabled — активен ли пользователь в realm.
+  bool enabled = 5;
+  // found — найден ли субъект в каталоге; false → «осиротевший» (роль есть, в
+  // каталоге нет).
+  bool found = 6;
+}
+
+message SearchSubjectsRequest {
+  // query — строка поиска (username/email/имя); непустая, не короче минимума.
+  string query = 1;
+  // cursor — непрозрачный курсор страницы (поверх offset Keycloak); пусто —
+  // первая страница.
+  string cursor = 2;
+  // page_size — желаемый размер страницы; сервер клампит к пределу (0 → дефолт).
+  int32 page_size = 3;
+}
+
+message SearchSubjectsResponse {
+  // subjects — страница найденных идентичностей (found=true).
+  repeated SubjectIdentity subjects = 1;
+  // next_cursor — непрозрачный курсор следующей страницы (пусто — больше нет).
+  string next_cursor = 2;
+}
+
+message ResolveSubjectsRequest {
+  // subjects — канонические ключи (sub) для резолва (непустой список).
+  repeated string subjects = 1;
+}
+
+message ResolveSubjectsResponse {
+  // subjects — идентичности в том же составе ключей; отсутствующие — found=false.
+  repeated SubjectIdentity subjects = 1;
+}
+
 // Role — роль каталога. Стабильный идентификатор роли — её name (им же оперируют
 // AssignRole/RevokeRole); внутренний id (UUID) наружу не отдаётся.
 message Role {

@@ -6,7 +6,7 @@
 // скрыты). Все данные идут через периметр с рантайм-валидацией ответов zod; отказ
 // доступа (403) скрывает содержимое (fail-closed на UI), внутренние ошибки клиенту
 // не раскрываются.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -21,6 +21,7 @@ import {
   Loader2,
   Lock,
   Plus,
+  Search,
   ShieldX,
   Trash2,
   UserCog,
@@ -41,8 +42,9 @@ function httpStatusOf(err: unknown): number | undefined {
 }
 
 // assignFormSchema — валидация ввода формы назначения роли (subject + role).
+// subject заполняется выбором пользователя из справочника (пикер).
 const assignFormSchema = z.object({
-  subject: z.string().min(1, "Укажите субъекта"),
+  subject: z.string().min(1, "Выберите пользователя"),
   role: z.string().min(1, "Выберите роль"),
 });
 type AssignFormValues = z.infer<typeof assignFormSchema>;
@@ -63,6 +65,12 @@ export function IamPage() {
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [attachPerm, setAttachPerm] = useState<string>("");
+  // Поиск пользователя в каталоге (пикер назначения роли, ADR-0016). Debounce,
+  // чтобы не дёргать справочник на каждый символ.
+  const [subjectSearch, setSubjectSearch] = useState<string>("");
+  const debouncedSearch = useDebounced(subjectSearch, 300);
+  // Выбранный в пикере пользователь (для отображения; ключ — в поле формы subject).
+  const [picked, setPicked] = useState<{ label: string; email: string } | null>(null);
 
   // Каталог ролей. Ошибка 403 здесь означает отсутствие права на админку —
   // содержимое раздела не показываем (fail-closed на UI).
@@ -95,10 +103,24 @@ export function IamPage() {
     retry: false,
   });
 
+  // Справочник субъектов из каталога Keycloak (ADR-0016): поиск под право
+  // (read, iam:directory). 403 — нет права на PII (пикер скрываем, назначение по
+  // строке остаётся); 503 — каталог недоступен (показываем индикацию).
+  const directoryQuery = useQuery({
+    queryKey: ["iam", "directory", debouncedSearch],
+    queryFn: () =>
+      apiClient.searchDirectorySubjects({ queries: { search: debouncedSearch } }),
+    enabled: debouncedSearch.trim().length >= 2,
+    retry: false,
+  });
+  const directoryForbidden = httpStatusOf(directoryQuery.error) === 403;
+  const directoryUnavailable = httpStatusOf(directoryQuery.error) === 503;
+
   const {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors },
   } = useForm<AssignFormValues>({
     resolver: zodResolver(assignFormSchema),
@@ -130,6 +152,7 @@ export function IamPage() {
     onSuccess: () => {
       setActionError(null);
       reset();
+      setPicked(null);
       void invalidateSubjects();
     },
     onError: (err) => setActionError(mutationMessage(err, "назначить")),
@@ -539,10 +562,11 @@ export function IamPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <UserCog className="size-4" /> Назначить роль субъекту
+            <UserCog className="size-4" /> Назначить роль пользователю
           </CardTitle>
           <CardDescription>
-            Выдача существующей роли субъекту (sub из JWT). Операция идемпотентна.
+            Выдача существующей роли пользователю из каталога. Найдите пользователя
+            и выберите его. Операция идемпотентна.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -553,20 +577,100 @@ export function IamPage() {
               assignMutation.mutate(values);
             })}
           >
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="subject" className="text-sm font-medium">
-                Субъект
-              </label>
-              <Input
-                id="subject"
-                placeholder="например, demo-user"
-                aria-invalid={Boolean(errors.subject)}
-                {...register("subject")}
-              />
-              {errors.subject && (
-                <p className="text-sm text-destructive">{errors.subject.message}</p>
-              )}
-            </div>
+            {/* Назначение роли возможно только выбором пользователя из каталога
+                (ADR-0016): нужно право (read, iam:directory). Без него пикер скрыт. */}
+            {directoryForbidden ? (
+              <p className="flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <ShieldX className="size-4 shrink-0" /> Нет доступа к каталогу
+                пользователей (нужно право read на iam:directory).
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="subject-search" className="text-sm font-medium">
+                  Поиск пользователя
+                </label>
+                {/* Скрытое поле формы хранит канонический subject выбранного. */}
+                <input type="hidden" {...register("subject")} />
+                {picked ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                    <span className="flex flex-col">
+                      <span className="font-medium">{picked.label}</span>
+                      {picked.email && (
+                        <span className="text-xs text-muted-foreground">{picked.email}</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Сбросить выбор пользователя"
+                      className="text-muted-foreground transition-colors hover:text-destructive"
+                      onClick={() => {
+                        setPicked(null);
+                        setValue("subject", "", { shouldValidate: false });
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                      <Input
+                        id="subject-search"
+                        className="pl-8"
+                        placeholder="имя, логин или email"
+                        value={subjectSearch}
+                        onChange={(e) => setSubjectSearch(e.target.value)}
+                      />
+                    </div>
+                    {directoryUnavailable && (
+                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <AlertTriangle className="size-3.5" /> Каталог недоступен —
+                        попробуйте позже.
+                      </p>
+                    )}
+                    {directoryQuery.isFetching && !directoryUnavailable && (
+                      <p className="text-sm text-muted-foreground">Поиск…</p>
+                    )}
+                    {directoryQuery.data && directoryQuery.data.subjects.length > 0 && (
+                      <ul className="flex flex-col gap-1 rounded-md border border-border p-1">
+                        {directoryQuery.data.subjects.map((u) => (
+                          <li key={u.subject}>
+                            <button
+                              type="button"
+                              className="flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm hover:bg-accent"
+                              onClick={() => {
+                                setValue("subject", u.subject, { shouldValidate: true });
+                                setPicked({
+                                  label: u.display_name || u.username || u.subject,
+                                  email: u.email,
+                                });
+                                setSubjectSearch("");
+                              }}
+                            >
+                              <span className="font-medium">
+                                {u.display_name || u.username || u.subject}
+                              </span>
+                              {u.email && (
+                                <span className="text-xs text-muted-foreground">{u.email}</span>
+                              )}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {directoryQuery.data &&
+                      directoryQuery.data.subjects.length === 0 &&
+                      debouncedSearch.trim().length >= 2 && (
+                        <p className="text-sm text-muted-foreground">Никого не найдено.</p>
+                      )}
+                  </>
+                )}
+                {errors.subject && (
+                  <p className="text-sm text-destructive">{errors.subject.message}</p>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <label htmlFor="role" className="text-sm font-medium">
                 Роль
@@ -587,7 +691,7 @@ export function IamPage() {
               {errors.role && <p className="text-sm text-destructive">{errors.role.message}</p>}
             </div>
             <div className="flex justify-end">
-              <Button type="submit" disabled={assignMutation.isPending}>
+              <Button type="submit" disabled={assignMutation.isPending || directoryForbidden}>
                 {assignMutation.isPending && <Loader2 className="size-4 animate-spin" />}
                 {assignMutation.isPending ? "Назначаем…" : "Назначить"}
               </Button>
@@ -596,21 +700,22 @@ export function IamPage() {
         </CardContent>
       </Card>
 
-      {/* Субъекты с их ролями */}
+      {/* Пользователи с их ролями */}
       <Card>
         <CardHeader>
-          <CardTitle>Субъекты</CardTitle>
+          <CardTitle>Пользователи</CardTitle>
           <CardDescription>
-            Субъекты с назначенными ролями. Субъекты без ролей в системе не видны.
+            Пользователи с назначенными ролями. Пользователи без ролей в системе не
+            видны.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {subjectsQuery.isLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
           {subjectsQuery.isError && (
-            <p className="text-sm text-destructive">Не удалось загрузить субъектов.</p>
+            <p className="text-sm text-destructive">Не удалось загрузить пользователей.</p>
           )}
           {subjects.length === 0 && subjectsQuery.data && (
-            <p className="text-sm text-muted-foreground">Нет субъектов с ролями.</p>
+            <p className="text-sm text-muted-foreground">Нет пользователей с ролями.</p>
           )}
           <ul className="flex flex-col gap-2">
             {subjects.map((s) => (
@@ -618,7 +723,28 @@ export function IamPage() {
                 key={s.subject}
                 className="flex flex-col gap-2 rounded-md border border-border p-3"
               >
-                <span className="font-medium">{s.subject}</span>
+                <div className="flex flex-col gap-0.5">
+                  {s.identity && s.identity.found ? (
+                    <>
+                      <span className="font-medium">
+                        {s.identity.display_name || s.identity.username || s.subject}
+                      </span>
+                      {s.identity.email && (
+                        <span className="text-xs text-muted-foreground">{s.identity.email}</span>
+                      )}
+                      <span className="font-mono text-xs text-muted-foreground">{s.subject}</span>
+                    </>
+                  ) : (
+                    <span className="flex items-center gap-2 font-medium">
+                      <span className="font-mono text-sm">{s.subject}</span>
+                      {s.identity && !s.identity.found && (
+                        <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+                          <AlertTriangle className="size-3" /> нет в каталоге
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {s.roles.map((role) => (
                     <span
@@ -659,6 +785,17 @@ export function IamPage() {
       </Card>
     </section>
   );
+}
+
+// useDebounced возвращает значение с задержкой: пикер пользователя не дёргает
+// справочник на каждый набранный символ (ADR-0016).
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState<T>(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
 }
 
 // mutationMessage переводит ошибку мутации назначения/снятия роли в стабильное
