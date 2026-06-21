@@ -144,6 +144,24 @@ jobs:
       - name: verify no diff
         run: git diff --exit-code
 
+  web-test:
+    name: web tests (vitest) + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: install web deps
+        working-directory: web
+        run: npm ci
+      - name: typecheck
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: vitest
+        working-directory: web
+        run: npm test
+
   integration:
     name: integration tests
     runs-on: ubuntu-latest
