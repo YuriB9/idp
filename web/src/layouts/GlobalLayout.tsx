@@ -37,9 +37,10 @@ export function GlobalLayout() {
             Роли и доступы
           </NavLink>
           {/* Статическая страница Swagger UI (вне react-router) — обычная ссылка
-              с полной навигацией; открываем в новой вкладке. */}
+              с полной навигацией; открываем в новой вкладке. Одиночный файл
+              /swagger.html, чтобы не зависеть от директорийного индекса. */}
           <a
-            href="/swagger/"
+            href="/swagger.html"
             target="_blank"
             rel="noreferrer"
             className={navLinkClass({ isActive: false })}

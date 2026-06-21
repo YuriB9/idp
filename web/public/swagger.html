@@ -1,7 +1,9 @@
 <!doctype html>
 <!--
   Swagger UI портала IDP — интерактивная документация периметра (ADR-0009).
-  Статическая страница (вне SPA react-router): отдаётся напрямую из public/.
+  Статическая страница (вне SPA react-router): отдаётся напрямую из public/ по
+  пути /swagger.html (одиночный файл, без директорийного индекса — однозначно
+  резолвится и vite-dev, и статик-хостом через try_files $uri /index.html).
   Спецификация берётся из /openapi.yaml (копия openapi/openapi.yaml, кладётся
   кодогеном `npm run gen`). Запросы «Try it out» идут same-origin на /api и
   проксируются на gateway (dev — vite-прокси :8081; локалка — oauth2-proxy).
