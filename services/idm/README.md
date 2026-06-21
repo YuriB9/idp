@@ -250,6 +250,70 @@ gateway вызывает `CheckAccess(manage, iam:global)` **перед кажд
 - После любой структурной правки поколение `idm:cache:gen` инкрементируется —
   новый `CheckAccess` всех носителей отражает изменение.
 
+## Справочник субъектов из каталога Keycloak (IdentityService, ADR-0016)
+
+Субъект RBAC — это канонический ключ `sub` из JWT (UUID пользователя Keycloak),
+он же `subject_roles.subject` и `auth.Claims.Subject`. `preferred_username` ключом
+авторизации **не** является (изменяем). `IdentityService` даёт IAM-админке реальный
+справочник пользователей realm `idp`:
+
+- `SearchSubjects(query, cursor, page_size)` — поиск по username/email/имени
+  (постраничный, непрозрачный курсор поверх offset Keycloak);
+- `ResolveSubjects(subjects[])` — батч-резолв `sub` → идентичность
+  (`{subject, username, email, display_name, enabled, found}`); отсутствующие в
+  каталоге → `found=false` («осиротевшие»: роль есть, в каталоге нет).
+
+**Источник правды** — живой запрос в Keycloak Admin REST + **отдельный** кэш
+идентичностей в DragonflyDB (namespace `idm:identity:*`, TTL). Этот кэш **не**
+трогает decision-cache RBAC (`idm:cache:gen`/`InvalidateSubject`): у решений и
+идентичностей разные жизненные циклы (решения инвалидируются мутациями RBAC,
+идентичности — по TTL из внешнего источника).
+
+### Сервис-аккаунт Keycloak
+
+Чтение каталога идёт от confidential-клиента `idm-service-account` (realm-management
+роли `view-users`/`query-users`), токен — по `client_credentials`. Секрет берётся из
+env (локалка) / Vault (прод) и **не логируется и наружу не отдаётся**. Все исходящие
+вызовы (токен + Admin REST) проходят через SSRF-guard (`pkg/ssrf`: ValidateURL +
+GuardedDialContext) и `pkg/httpclient`; `SSRF_DISABLED=true` — **только локалка**
+(адрес keycloak приватный, http). Реализация — слой `internal/identity` (образец
+outbound — devinfra-worker).
+
+### Авторизация просмотра PII
+
+Листинг/резолв реальных идентичностей (PII) авторизуется **отдельным** правом
+`(read, iam:directory)` — наименьшие привилегии, отдельно от `read`/`write`/`manage`
+на `iam:global`. Обогащение списка субъектов (`GET /iam/subjects`) идентичностями
+выполняется **только** при наличии этого права; иначе ответ «сырой» (PII не
+раскрывается). Роли `iam-admin` право засеяно миграцией `0010`.
+
+### Поведение при недоступном Keycloak (деградация)
+
+Справочник **не критичен** для `CheckAccess` (решение по `sub` не зависит от имён):
+
+- ручки `/iam/directory/*` → **503** (retryable), UI показывает «каталог недоступен»;
+- обогащение `GET /iam/subjects` опускает идентичности (роли отдаются `200`);
+- управление ролями по сырому `sub` **не ломается**.
+
+Листинг всё равно под `CheckAccess` (deny-by-default) **до** запроса в Keycloak.
+
+### Сведение локалки (канонический ключ)
+
+Реальному `dev` в `deploy/keycloak/idp-realm.json` задан детерминированный UUID
+`11111111-1111-1111-1111-111111111111`; `AUTH_DISABLED_SUBJECT` в compose равен ему;
+миграция `0009` перенесла сиды `subject_roles` с `demo-user` на этот UUID. Поэтому и
+реальный вход через Keycloak, и локальный disabled-режим дают один и тот же `sub`.
+
+### Как проверить поиск/назначение
+
+- В разделе портала «Роли и доступы» начните вводить имя/логин/email в «Поиск
+  пользователя» — пикер (с debounce) покажет совпадения из каталога; выбор
+  подставляет канонический `sub`.
+- Рядом с субъектами в списке видны `username`/`email`; «осиротевшие» помечены
+  «нет в каталоге».
+- Без `(read, iam:directory)` пикер скрыт, назначение по строке subject остаётся
+  доступным; при недоступном Keycloak — индикация «каталог недоступен».
+
 ## Конфигурация (env)
 
 | Переменная | Назначение | Дефолт |
@@ -258,5 +322,11 @@ gateway вызывает `CheckAccess(manage, iam:global)` **перед кажд
 | `REDIS_ADDR` | адрес DragonflyDB | `dragonfly:6379` |
 | `IDM_CACHE_TTL` | TTL allow-решений | `30s` |
 | `IDM_CACHE_TTL_DENY` | TTL deny-решений | `10s` |
+| `IDM_IDENTITY_CACHE_TTL` | TTL кэша идентичностей (справочник, ADR-0016) | `5m` |
+| `KEYCLOAK_BASE_URL` | базовый адрес Keycloak | `http://keycloak:8080` |
+| `KEYCLOAK_REALM` | realm каталога пользователей | `idp` |
+| `KEYCLOAK_SA_CLIENT_ID` | client-id сервис-аккаунта | `idm-service-account` |
+| `KEYCLOAK_SA_CLIENT_SECRET` | секрет сервис-аккаунта (не логируется) | — |
+| `SSRF_DISABLED` | отключить SSRF-guard (**только локалка**) | `false` |
 | `GRPC_ADDR` / `HTTP_ADDR` | адреса gRPC / HTTP (`/healthz`,`/readyz`) | `:9090` / `:8081` |
 | `AUTH_DISABLED` | локальный bypass JWT (только локалка) | `false` |

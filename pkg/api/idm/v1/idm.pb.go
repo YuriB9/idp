@@ -25,6 +25,307 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SubjectIdentity — идентичность субъекта из каталога Keycloak.
+type SubjectIdentity struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subject — канонический ключ субъекта = sub (UUID Keycloak); тот же, что в
+	// subject_roles.subject и auth.Claims.Subject.
+	Subject string `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	// username — имя входа (preferred_username); ключом авторизации НЕ является.
+	Username string `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	// email — адрес электронной почты пользователя.
+	Email string `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	// display_name — отображаемое имя (имя + фамилия), если задано.
+	DisplayName string `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// enabled — активен ли пользователь в realm.
+	Enabled bool `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// found — найден ли субъект в каталоге; false → «осиротевший» (роль есть, в
+	// каталоге нет).
+	Found         bool `protobuf:"varint,6,opt,name=found,proto3" json:"found,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubjectIdentity) Reset() {
+	*x = SubjectIdentity{}
+	mi := &file_idm_v1_idm_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubjectIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubjectIdentity) ProtoMessage() {}
+
+func (x *SubjectIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubjectIdentity.ProtoReflect.Descriptor instead.
+func (*SubjectIdentity) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SubjectIdentity) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *SubjectIdentity) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *SubjectIdentity) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *SubjectIdentity) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *SubjectIdentity) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *SubjectIdentity) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+type SearchSubjectsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// query — строка поиска (username/email/имя); непустая, не короче минимума.
+	Query string `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	// cursor — непрозрачный курсор страницы (поверх offset Keycloak); пусто —
+	// первая страница.
+	Cursor string `protobuf:"bytes,2,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// page_size — желаемый размер страницы; сервер клампит к пределу (0 → дефолт).
+	PageSize      int32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchSubjectsRequest) Reset() {
+	*x = SearchSubjectsRequest{}
+	mi := &file_idm_v1_idm_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchSubjectsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchSubjectsRequest) ProtoMessage() {}
+
+func (x *SearchSubjectsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchSubjectsRequest.ProtoReflect.Descriptor instead.
+func (*SearchSubjectsRequest) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SearchSubjectsRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *SearchSubjectsRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+func (x *SearchSubjectsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+type SearchSubjectsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subjects — страница найденных идентичностей (found=true).
+	Subjects []*SubjectIdentity `protobuf:"bytes,1,rep,name=subjects,proto3" json:"subjects,omitempty"`
+	// next_cursor — непрозрачный курсор следующей страницы (пусто — больше нет).
+	NextCursor    string `protobuf:"bytes,2,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchSubjectsResponse) Reset() {
+	*x = SearchSubjectsResponse{}
+	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchSubjectsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchSubjectsResponse) ProtoMessage() {}
+
+func (x *SearchSubjectsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchSubjectsResponse.ProtoReflect.Descriptor instead.
+func (*SearchSubjectsResponse) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SearchSubjectsResponse) GetSubjects() []*SubjectIdentity {
+	if x != nil {
+		return x.Subjects
+	}
+	return nil
+}
+
+func (x *SearchSubjectsResponse) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
+}
+
+type ResolveSubjectsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subjects — канонические ключи (sub) для резолва (непустой список).
+	Subjects      []string `protobuf:"bytes,1,rep,name=subjects,proto3" json:"subjects,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveSubjectsRequest) Reset() {
+	*x = ResolveSubjectsRequest{}
+	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveSubjectsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveSubjectsRequest) ProtoMessage() {}
+
+func (x *ResolveSubjectsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveSubjectsRequest.ProtoReflect.Descriptor instead.
+func (*ResolveSubjectsRequest) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ResolveSubjectsRequest) GetSubjects() []string {
+	if x != nil {
+		return x.Subjects
+	}
+	return nil
+}
+
+type ResolveSubjectsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// subjects — идентичности в том же составе ключей; отсутствующие — found=false.
+	Subjects      []*SubjectIdentity `protobuf:"bytes,1,rep,name=subjects,proto3" json:"subjects,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResolveSubjectsResponse) Reset() {
+	*x = ResolveSubjectsResponse{}
+	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResolveSubjectsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResolveSubjectsResponse) ProtoMessage() {}
+
+func (x *ResolveSubjectsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResolveSubjectsResponse.ProtoReflect.Descriptor instead.
+func (*ResolveSubjectsResponse) Descriptor() ([]byte, []int) {
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ResolveSubjectsResponse) GetSubjects() []*SubjectIdentity {
+	if x != nil {
+		return x.Subjects
+	}
+	return nil
+}
+
 // Role — роль каталога. Стабильный идентификатор роли — её name (им же оперируют
 // AssignRole/RevokeRole); внутренний id (UUID) наружу не отдаётся.
 type Role struct {
@@ -41,7 +342,7 @@ type Role struct {
 
 func (x *Role) Reset() {
 	*x = Role{}
-	mi := &file_idm_v1_idm_proto_msgTypes[0]
+	mi := &file_idm_v1_idm_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -53,7 +354,7 @@ func (x *Role) String() string {
 func (*Role) ProtoMessage() {}
 
 func (x *Role) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[0]
+	mi := &file_idm_v1_idm_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -66,7 +367,7 @@ func (x *Role) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Role.ProtoReflect.Descriptor instead.
 func (*Role) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{0}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Role) GetName() string {
@@ -99,7 +400,7 @@ type Permission struct {
 
 func (x *Permission) Reset() {
 	*x = Permission{}
-	mi := &file_idm_v1_idm_proto_msgTypes[1]
+	mi := &file_idm_v1_idm_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -111,7 +412,7 @@ func (x *Permission) String() string {
 func (*Permission) ProtoMessage() {}
 
 func (x *Permission) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[1]
+	mi := &file_idm_v1_idm_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -124,7 +425,7 @@ func (x *Permission) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Permission.ProtoReflect.Descriptor instead.
 func (*Permission) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{1}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Permission) GetAction() string {
@@ -161,7 +462,7 @@ type SubjectRoles struct {
 
 func (x *SubjectRoles) Reset() {
 	*x = SubjectRoles{}
-	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	mi := &file_idm_v1_idm_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -173,7 +474,7 @@ func (x *SubjectRoles) String() string {
 func (*SubjectRoles) ProtoMessage() {}
 
 func (x *SubjectRoles) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[2]
+	mi := &file_idm_v1_idm_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -186,7 +487,7 @@ func (x *SubjectRoles) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubjectRoles.ProtoReflect.Descriptor instead.
 func (*SubjectRoles) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{2}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SubjectRoles) GetSubject() string {
@@ -211,7 +512,7 @@ type ListRolesRequest struct {
 
 func (x *ListRolesRequest) Reset() {
 	*x = ListRolesRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	mi := &file_idm_v1_idm_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -223,7 +524,7 @@ func (x *ListRolesRequest) String() string {
 func (*ListRolesRequest) ProtoMessage() {}
 
 func (x *ListRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[3]
+	mi := &file_idm_v1_idm_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -236,7 +537,7 @@ func (x *ListRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesRequest.ProtoReflect.Descriptor instead.
 func (*ListRolesRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{3}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{8}
 }
 
 type ListRolesResponse struct {
@@ -249,7 +550,7 @@ type ListRolesResponse struct {
 
 func (x *ListRolesResponse) Reset() {
 	*x = ListRolesResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	mi := &file_idm_v1_idm_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +562,7 @@ func (x *ListRolesResponse) String() string {
 func (*ListRolesResponse) ProtoMessage() {}
 
 func (x *ListRolesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[4]
+	mi := &file_idm_v1_idm_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +575,7 @@ func (x *ListRolesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRolesResponse.ProtoReflect.Descriptor instead.
 func (*ListRolesResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{4}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListRolesResponse) GetRoles() []*Role {
@@ -292,7 +593,7 @@ type ListPermissionsRequest struct {
 
 func (x *ListPermissionsRequest) Reset() {
 	*x = ListPermissionsRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[5]
+	mi := &file_idm_v1_idm_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -304,7 +605,7 @@ func (x *ListPermissionsRequest) String() string {
 func (*ListPermissionsRequest) ProtoMessage() {}
 
 func (x *ListPermissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[5]
+	mi := &file_idm_v1_idm_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -317,7 +618,7 @@ func (x *ListPermissionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPermissionsRequest.ProtoReflect.Descriptor instead.
 func (*ListPermissionsRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{5}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{10}
 }
 
 type ListPermissionsResponse struct {
@@ -330,7 +631,7 @@ type ListPermissionsResponse struct {
 
 func (x *ListPermissionsResponse) Reset() {
 	*x = ListPermissionsResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[6]
+	mi := &file_idm_v1_idm_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -342,7 +643,7 @@ func (x *ListPermissionsResponse) String() string {
 func (*ListPermissionsResponse) ProtoMessage() {}
 
 func (x *ListPermissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[6]
+	mi := &file_idm_v1_idm_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -355,7 +656,7 @@ func (x *ListPermissionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPermissionsResponse.ProtoReflect.Descriptor instead.
 func (*ListPermissionsResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{6}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListPermissionsResponse) GetPermissions() []*Permission {
@@ -375,7 +676,7 @@ type GetRolePermissionsRequest struct {
 
 func (x *GetRolePermissionsRequest) Reset() {
 	*x = GetRolePermissionsRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[7]
+	mi := &file_idm_v1_idm_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -387,7 +688,7 @@ func (x *GetRolePermissionsRequest) String() string {
 func (*GetRolePermissionsRequest) ProtoMessage() {}
 
 func (x *GetRolePermissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[7]
+	mi := &file_idm_v1_idm_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -400,7 +701,7 @@ func (x *GetRolePermissionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRolePermissionsRequest.ProtoReflect.Descriptor instead.
 func (*GetRolePermissionsRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{7}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetRolePermissionsRequest) GetRole() string {
@@ -420,7 +721,7 @@ type GetRolePermissionsResponse struct {
 
 func (x *GetRolePermissionsResponse) Reset() {
 	*x = GetRolePermissionsResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[8]
+	mi := &file_idm_v1_idm_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -432,7 +733,7 @@ func (x *GetRolePermissionsResponse) String() string {
 func (*GetRolePermissionsResponse) ProtoMessage() {}
 
 func (x *GetRolePermissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[8]
+	mi := &file_idm_v1_idm_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -445,7 +746,7 @@ func (x *GetRolePermissionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRolePermissionsResponse.ProtoReflect.Descriptor instead.
 func (*GetRolePermissionsResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{8}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetRolePermissionsResponse) GetPermissions() []*Permission {
@@ -467,7 +768,7 @@ type ListSubjectsWithRolesRequest struct {
 
 func (x *ListSubjectsWithRolesRequest) Reset() {
 	*x = ListSubjectsWithRolesRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[9]
+	mi := &file_idm_v1_idm_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +780,7 @@ func (x *ListSubjectsWithRolesRequest) String() string {
 func (*ListSubjectsWithRolesRequest) ProtoMessage() {}
 
 func (x *ListSubjectsWithRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[9]
+	mi := &file_idm_v1_idm_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +793,7 @@ func (x *ListSubjectsWithRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubjectsWithRolesRequest.ProtoReflect.Descriptor instead.
 func (*ListSubjectsWithRolesRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{9}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListSubjectsWithRolesRequest) GetPageSize() int32 {
@@ -521,7 +822,7 @@ type ListSubjectsWithRolesResponse struct {
 
 func (x *ListSubjectsWithRolesResponse) Reset() {
 	*x = ListSubjectsWithRolesResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[10]
+	mi := &file_idm_v1_idm_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -533,7 +834,7 @@ func (x *ListSubjectsWithRolesResponse) String() string {
 func (*ListSubjectsWithRolesResponse) ProtoMessage() {}
 
 func (x *ListSubjectsWithRolesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[10]
+	mi := &file_idm_v1_idm_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -546,7 +847,7 @@ func (x *ListSubjectsWithRolesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubjectsWithRolesResponse.ProtoReflect.Descriptor instead.
 func (*ListSubjectsWithRolesResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{10}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListSubjectsWithRolesResponse) GetSubjects() []*SubjectRoles {
@@ -573,7 +874,7 @@ type GetSubjectRolesRequest struct {
 
 func (x *GetSubjectRolesRequest) Reset() {
 	*x = GetSubjectRolesRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[11]
+	mi := &file_idm_v1_idm_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -585,7 +886,7 @@ func (x *GetSubjectRolesRequest) String() string {
 func (*GetSubjectRolesRequest) ProtoMessage() {}
 
 func (x *GetSubjectRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[11]
+	mi := &file_idm_v1_idm_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -598,7 +899,7 @@ func (x *GetSubjectRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubjectRolesRequest.ProtoReflect.Descriptor instead.
 func (*GetSubjectRolesRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{11}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetSubjectRolesRequest) GetSubject() string {
@@ -618,7 +919,7 @@ type GetSubjectRolesResponse struct {
 
 func (x *GetSubjectRolesResponse) Reset() {
 	*x = GetSubjectRolesResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[12]
+	mi := &file_idm_v1_idm_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +931,7 @@ func (x *GetSubjectRolesResponse) String() string {
 func (*GetSubjectRolesResponse) ProtoMessage() {}
 
 func (x *GetSubjectRolesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[12]
+	mi := &file_idm_v1_idm_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +944,7 @@ func (x *GetSubjectRolesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubjectRolesResponse.ProtoReflect.Descriptor instead.
 func (*GetSubjectRolesResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{12}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetSubjectRolesResponse) GetRoles() []string {
@@ -667,7 +968,7 @@ type CheckAccessRequest struct {
 
 func (x *CheckAccessRequest) Reset() {
 	*x = CheckAccessRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[13]
+	mi := &file_idm_v1_idm_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +980,7 @@ func (x *CheckAccessRequest) String() string {
 func (*CheckAccessRequest) ProtoMessage() {}
 
 func (x *CheckAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[13]
+	mi := &file_idm_v1_idm_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,7 +993,7 @@ func (x *CheckAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckAccessRequest.ProtoReflect.Descriptor instead.
 func (*CheckAccessRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{13}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CheckAccessRequest) GetSubject() string {
@@ -728,7 +1029,7 @@ type CheckAccessResponse struct {
 
 func (x *CheckAccessResponse) Reset() {
 	*x = CheckAccessResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[14]
+	mi := &file_idm_v1_idm_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -740,7 +1041,7 @@ func (x *CheckAccessResponse) String() string {
 func (*CheckAccessResponse) ProtoMessage() {}
 
 func (x *CheckAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[14]
+	mi := &file_idm_v1_idm_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -753,7 +1054,7 @@ func (x *CheckAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckAccessResponse.ProtoReflect.Descriptor instead.
 func (*CheckAccessResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{14}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CheckAccessResponse) GetAllowed() bool {
@@ -782,7 +1083,7 @@ type AssignRoleRequest struct {
 
 func (x *AssignRoleRequest) Reset() {
 	*x = AssignRoleRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[15]
+	mi := &file_idm_v1_idm_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +1095,7 @@ func (x *AssignRoleRequest) String() string {
 func (*AssignRoleRequest) ProtoMessage() {}
 
 func (x *AssignRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[15]
+	mi := &file_idm_v1_idm_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,7 +1108,7 @@ func (x *AssignRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleRequest.ProtoReflect.Descriptor instead.
 func (*AssignRoleRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{15}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AssignRoleRequest) GetSubject() string {
@@ -832,7 +1133,7 @@ type AssignRoleResponse struct {
 
 func (x *AssignRoleResponse) Reset() {
 	*x = AssignRoleResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[16]
+	mi := &file_idm_v1_idm_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -844,7 +1145,7 @@ func (x *AssignRoleResponse) String() string {
 func (*AssignRoleResponse) ProtoMessage() {}
 
 func (x *AssignRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[16]
+	mi := &file_idm_v1_idm_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -857,7 +1158,7 @@ func (x *AssignRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleResponse.ProtoReflect.Descriptor instead.
 func (*AssignRoleResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{16}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{21}
 }
 
 type RevokeRoleRequest struct {
@@ -872,7 +1173,7 @@ type RevokeRoleRequest struct {
 
 func (x *RevokeRoleRequest) Reset() {
 	*x = RevokeRoleRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[17]
+	mi := &file_idm_v1_idm_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -884,7 +1185,7 @@ func (x *RevokeRoleRequest) String() string {
 func (*RevokeRoleRequest) ProtoMessage() {}
 
 func (x *RevokeRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[17]
+	mi := &file_idm_v1_idm_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -897,7 +1198,7 @@ func (x *RevokeRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRoleRequest.ProtoReflect.Descriptor instead.
 func (*RevokeRoleRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{17}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RevokeRoleRequest) GetSubject() string {
@@ -922,7 +1223,7 @@ type RevokeRoleResponse struct {
 
 func (x *RevokeRoleResponse) Reset() {
 	*x = RevokeRoleResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[18]
+	mi := &file_idm_v1_idm_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -934,7 +1235,7 @@ func (x *RevokeRoleResponse) String() string {
 func (*RevokeRoleResponse) ProtoMessage() {}
 
 func (x *RevokeRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[18]
+	mi := &file_idm_v1_idm_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -947,7 +1248,7 @@ func (x *RevokeRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeRoleResponse.ProtoReflect.Descriptor instead.
 func (*RevokeRoleResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{18}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{23}
 }
 
 // RolePermissions — роль и актуальный набор её прав (ответ attach/detach).
@@ -963,7 +1264,7 @@ type RolePermissions struct {
 
 func (x *RolePermissions) Reset() {
 	*x = RolePermissions{}
-	mi := &file_idm_v1_idm_proto_msgTypes[19]
+	mi := &file_idm_v1_idm_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -975,7 +1276,7 @@ func (x *RolePermissions) String() string {
 func (*RolePermissions) ProtoMessage() {}
 
 func (x *RolePermissions) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[19]
+	mi := &file_idm_v1_idm_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -988,7 +1289,7 @@ func (x *RolePermissions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RolePermissions.ProtoReflect.Descriptor instead.
 func (*RolePermissions) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{19}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RolePermissions) GetRole() string {
@@ -1015,7 +1316,7 @@ type CreateRoleRequest struct {
 
 func (x *CreateRoleRequest) Reset() {
 	*x = CreateRoleRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[20]
+	mi := &file_idm_v1_idm_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1027,7 +1328,7 @@ func (x *CreateRoleRequest) String() string {
 func (*CreateRoleRequest) ProtoMessage() {}
 
 func (x *CreateRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[20]
+	mi := &file_idm_v1_idm_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1040,7 +1341,7 @@ func (x *CreateRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRoleRequest.ProtoReflect.Descriptor instead.
 func (*CreateRoleRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{20}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *CreateRoleRequest) GetName() string {
@@ -1060,7 +1361,7 @@ type CreateRoleResponse struct {
 
 func (x *CreateRoleResponse) Reset() {
 	*x = CreateRoleResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[21]
+	mi := &file_idm_v1_idm_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1072,7 +1373,7 @@ func (x *CreateRoleResponse) String() string {
 func (*CreateRoleResponse) ProtoMessage() {}
 
 func (x *CreateRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[21]
+	mi := &file_idm_v1_idm_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1085,7 +1386,7 @@ func (x *CreateRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRoleResponse.ProtoReflect.Descriptor instead.
 func (*CreateRoleResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{21}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CreateRoleResponse) GetRole() *Role {
@@ -1105,7 +1406,7 @@ type DeleteRoleRequest struct {
 
 func (x *DeleteRoleRequest) Reset() {
 	*x = DeleteRoleRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[22]
+	mi := &file_idm_v1_idm_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1117,7 +1418,7 @@ func (x *DeleteRoleRequest) String() string {
 func (*DeleteRoleRequest) ProtoMessage() {}
 
 func (x *DeleteRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[22]
+	mi := &file_idm_v1_idm_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1130,7 +1431,7 @@ func (x *DeleteRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRoleRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{22}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *DeleteRoleRequest) GetName() string {
@@ -1148,7 +1449,7 @@ type DeleteRoleResponse struct {
 
 func (x *DeleteRoleResponse) Reset() {
 	*x = DeleteRoleResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[23]
+	mi := &file_idm_v1_idm_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1160,7 +1461,7 @@ func (x *DeleteRoleResponse) String() string {
 func (*DeleteRoleResponse) ProtoMessage() {}
 
 func (x *DeleteRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[23]
+	mi := &file_idm_v1_idm_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1173,7 +1474,7 @@ func (x *DeleteRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRoleResponse.ProtoReflect.Descriptor instead.
 func (*DeleteRoleResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{23}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{28}
 }
 
 type CreatePermissionRequest struct {
@@ -1188,7 +1489,7 @@ type CreatePermissionRequest struct {
 
 func (x *CreatePermissionRequest) Reset() {
 	*x = CreatePermissionRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[24]
+	mi := &file_idm_v1_idm_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1200,7 +1501,7 @@ func (x *CreatePermissionRequest) String() string {
 func (*CreatePermissionRequest) ProtoMessage() {}
 
 func (x *CreatePermissionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[24]
+	mi := &file_idm_v1_idm_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1213,7 +1514,7 @@ func (x *CreatePermissionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePermissionRequest.ProtoReflect.Descriptor instead.
 func (*CreatePermissionRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{24}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *CreatePermissionRequest) GetAction() string {
@@ -1240,7 +1541,7 @@ type CreatePermissionResponse struct {
 
 func (x *CreatePermissionResponse) Reset() {
 	*x = CreatePermissionResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[25]
+	mi := &file_idm_v1_idm_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1553,7 @@ func (x *CreatePermissionResponse) String() string {
 func (*CreatePermissionResponse) ProtoMessage() {}
 
 func (x *CreatePermissionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[25]
+	mi := &file_idm_v1_idm_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1265,7 +1566,7 @@ func (x *CreatePermissionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePermissionResponse.ProtoReflect.Descriptor instead.
 func (*CreatePermissionResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{25}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CreatePermissionResponse) GetPermission() *Permission {
@@ -1287,7 +1588,7 @@ type DeletePermissionRequest struct {
 
 func (x *DeletePermissionRequest) Reset() {
 	*x = DeletePermissionRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[26]
+	mi := &file_idm_v1_idm_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1299,7 +1600,7 @@ func (x *DeletePermissionRequest) String() string {
 func (*DeletePermissionRequest) ProtoMessage() {}
 
 func (x *DeletePermissionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[26]
+	mi := &file_idm_v1_idm_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1312,7 +1613,7 @@ func (x *DeletePermissionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePermissionRequest.ProtoReflect.Descriptor instead.
 func (*DeletePermissionRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{26}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DeletePermissionRequest) GetAction() string {
@@ -1337,7 +1638,7 @@ type DeletePermissionResponse struct {
 
 func (x *DeletePermissionResponse) Reset() {
 	*x = DeletePermissionResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[27]
+	mi := &file_idm_v1_idm_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1349,7 +1650,7 @@ func (x *DeletePermissionResponse) String() string {
 func (*DeletePermissionResponse) ProtoMessage() {}
 
 func (x *DeletePermissionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[27]
+	mi := &file_idm_v1_idm_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1362,7 +1663,7 @@ func (x *DeletePermissionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePermissionResponse.ProtoReflect.Descriptor instead.
 func (*DeletePermissionResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{27}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{32}
 }
 
 type AttachPermissionRequest struct {
@@ -1379,7 +1680,7 @@ type AttachPermissionRequest struct {
 
 func (x *AttachPermissionRequest) Reset() {
 	*x = AttachPermissionRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[28]
+	mi := &file_idm_v1_idm_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1391,7 +1692,7 @@ func (x *AttachPermissionRequest) String() string {
 func (*AttachPermissionRequest) ProtoMessage() {}
 
 func (x *AttachPermissionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[28]
+	mi := &file_idm_v1_idm_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1404,7 +1705,7 @@ func (x *AttachPermissionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachPermissionRequest.ProtoReflect.Descriptor instead.
 func (*AttachPermissionRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{28}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AttachPermissionRequest) GetRole() string {
@@ -1438,7 +1739,7 @@ type AttachPermissionResponse struct {
 
 func (x *AttachPermissionResponse) Reset() {
 	*x = AttachPermissionResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[29]
+	mi := &file_idm_v1_idm_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1450,7 +1751,7 @@ func (x *AttachPermissionResponse) String() string {
 func (*AttachPermissionResponse) ProtoMessage() {}
 
 func (x *AttachPermissionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[29]
+	mi := &file_idm_v1_idm_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1463,7 +1764,7 @@ func (x *AttachPermissionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachPermissionResponse.ProtoReflect.Descriptor instead.
 func (*AttachPermissionResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{29}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *AttachPermissionResponse) GetRolePermissions() *RolePermissions {
@@ -1487,7 +1788,7 @@ type DetachPermissionRequest struct {
 
 func (x *DetachPermissionRequest) Reset() {
 	*x = DetachPermissionRequest{}
-	mi := &file_idm_v1_idm_proto_msgTypes[30]
+	mi := &file_idm_v1_idm_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1499,7 +1800,7 @@ func (x *DetachPermissionRequest) String() string {
 func (*DetachPermissionRequest) ProtoMessage() {}
 
 func (x *DetachPermissionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[30]
+	mi := &file_idm_v1_idm_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1512,7 +1813,7 @@ func (x *DetachPermissionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachPermissionRequest.ProtoReflect.Descriptor instead.
 func (*DetachPermissionRequest) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{30}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DetachPermissionRequest) GetRole() string {
@@ -1546,7 +1847,7 @@ type DetachPermissionResponse struct {
 
 func (x *DetachPermissionResponse) Reset() {
 	*x = DetachPermissionResponse{}
-	mi := &file_idm_v1_idm_proto_msgTypes[31]
+	mi := &file_idm_v1_idm_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1558,7 +1859,7 @@ func (x *DetachPermissionResponse) String() string {
 func (*DetachPermissionResponse) ProtoMessage() {}
 
 func (x *DetachPermissionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_idm_v1_idm_proto_msgTypes[31]
+	mi := &file_idm_v1_idm_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1571,7 +1872,7 @@ func (x *DetachPermissionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachPermissionResponse.ProtoReflect.Descriptor instead.
 func (*DetachPermissionResponse) Descriptor() ([]byte, []int) {
-	return file_idm_v1_idm_proto_rawDescGZIP(), []int{31}
+	return file_idm_v1_idm_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *DetachPermissionResponse) GetRolePermissions() *RolePermissions {
@@ -1585,7 +1886,26 @@ var File_idm_v1_idm_proto protoreflect.FileDescriptor
 
 const file_idm_v1_idm_proto_rawDesc = "" +
 	"\n" +
-	"\x10idm/v1/idm.proto\x12\x06idm.v1\"2\n" +
+	"\x10idm/v1/idm.proto\x12\x06idm.v1\"\xb0\x01\n" +
+	"\x0fSubjectIdentity\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\tR\asubject\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x14\n" +
+	"\x05email\x18\x03 \x01(\tR\x05email\x12!\n" +
+	"\fdisplay_name\x18\x04 \x01(\tR\vdisplayName\x12\x18\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabled\x12\x14\n" +
+	"\x05found\x18\x06 \x01(\bR\x05found\"b\n" +
+	"\x15SearchSubjectsRequest\x12\x14\n" +
+	"\x05query\x18\x01 \x01(\tR\x05query\x12\x16\n" +
+	"\x06cursor\x18\x02 \x01(\tR\x06cursor\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\x05R\bpageSize\"n\n" +
+	"\x16SearchSubjectsResponse\x123\n" +
+	"\bsubjects\x18\x01 \x03(\v2\x17.idm.v1.SubjectIdentityR\bsubjects\x12\x1f\n" +
+	"\vnext_cursor\x18\x02 \x01(\tR\n" +
+	"nextCursor\"4\n" +
+	"\x16ResolveSubjectsRequest\x12\x1a\n" +
+	"\bsubjects\x18\x01 \x03(\tR\bsubjects\"N\n" +
+	"\x17ResolveSubjectsResponse\x123\n" +
+	"\bsubjects\x18\x01 \x03(\v2\x17.idm.v1.SubjectIdentityR\bsubjects\"2\n" +
 	"\x04Role\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06system\x18\x02 \x01(\bR\x06system\"X\n" +
@@ -1687,7 +2007,10 @@ const file_idm_v1_idm_proto_rawDesc = "" +
 	"\x10CreatePermission\x12\x1f.idm.v1.CreatePermissionRequest\x1a .idm.v1.CreatePermissionResponse\x12U\n" +
 	"\x10DeletePermission\x12\x1f.idm.v1.DeletePermissionRequest\x1a .idm.v1.DeletePermissionResponse\x12U\n" +
 	"\x10AttachPermission\x12\x1f.idm.v1.AttachPermissionRequest\x1a .idm.v1.AttachPermissionResponse\x12U\n" +
-	"\x10DetachPermission\x12\x1f.idm.v1.DetachPermissionRequest\x1a .idm.v1.DetachPermissionResponseB,Z*github.com/YuriB9/idp/pkg/api/idm/v1;idmv1b\x06proto3"
+	"\x10DetachPermission\x12\x1f.idm.v1.DetachPermissionRequest\x1a .idm.v1.DetachPermissionResponse2\xb6\x01\n" +
+	"\x0fIdentityService\x12O\n" +
+	"\x0eSearchSubjects\x12\x1d.idm.v1.SearchSubjectsRequest\x1a\x1e.idm.v1.SearchSubjectsResponse\x12R\n" +
+	"\x0fResolveSubjects\x12\x1e.idm.v1.ResolveSubjectsRequest\x1a\x1f.idm.v1.ResolveSubjectsResponseB,Z*github.com/YuriB9/idp/pkg/api/idm/v1;idmv1b\x06proto3"
 
 var (
 	file_idm_v1_idm_proto_rawDescOnce sync.Once
@@ -1701,84 +2024,95 @@ func file_idm_v1_idm_proto_rawDescGZIP() []byte {
 	return file_idm_v1_idm_proto_rawDescData
 }
 
-var file_idm_v1_idm_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_idm_v1_idm_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_idm_v1_idm_proto_goTypes = []any{
-	(*Role)(nil),                          // 0: idm.v1.Role
-	(*Permission)(nil),                    // 1: idm.v1.Permission
-	(*SubjectRoles)(nil),                  // 2: idm.v1.SubjectRoles
-	(*ListRolesRequest)(nil),              // 3: idm.v1.ListRolesRequest
-	(*ListRolesResponse)(nil),             // 4: idm.v1.ListRolesResponse
-	(*ListPermissionsRequest)(nil),        // 5: idm.v1.ListPermissionsRequest
-	(*ListPermissionsResponse)(nil),       // 6: idm.v1.ListPermissionsResponse
-	(*GetRolePermissionsRequest)(nil),     // 7: idm.v1.GetRolePermissionsRequest
-	(*GetRolePermissionsResponse)(nil),    // 8: idm.v1.GetRolePermissionsResponse
-	(*ListSubjectsWithRolesRequest)(nil),  // 9: idm.v1.ListSubjectsWithRolesRequest
-	(*ListSubjectsWithRolesResponse)(nil), // 10: idm.v1.ListSubjectsWithRolesResponse
-	(*GetSubjectRolesRequest)(nil),        // 11: idm.v1.GetSubjectRolesRequest
-	(*GetSubjectRolesResponse)(nil),       // 12: idm.v1.GetSubjectRolesResponse
-	(*CheckAccessRequest)(nil),            // 13: idm.v1.CheckAccessRequest
-	(*CheckAccessResponse)(nil),           // 14: idm.v1.CheckAccessResponse
-	(*AssignRoleRequest)(nil),             // 15: idm.v1.AssignRoleRequest
-	(*AssignRoleResponse)(nil),            // 16: idm.v1.AssignRoleResponse
-	(*RevokeRoleRequest)(nil),             // 17: idm.v1.RevokeRoleRequest
-	(*RevokeRoleResponse)(nil),            // 18: idm.v1.RevokeRoleResponse
-	(*RolePermissions)(nil),               // 19: idm.v1.RolePermissions
-	(*CreateRoleRequest)(nil),             // 20: idm.v1.CreateRoleRequest
-	(*CreateRoleResponse)(nil),            // 21: idm.v1.CreateRoleResponse
-	(*DeleteRoleRequest)(nil),             // 22: idm.v1.DeleteRoleRequest
-	(*DeleteRoleResponse)(nil),            // 23: idm.v1.DeleteRoleResponse
-	(*CreatePermissionRequest)(nil),       // 24: idm.v1.CreatePermissionRequest
-	(*CreatePermissionResponse)(nil),      // 25: idm.v1.CreatePermissionResponse
-	(*DeletePermissionRequest)(nil),       // 26: idm.v1.DeletePermissionRequest
-	(*DeletePermissionResponse)(nil),      // 27: idm.v1.DeletePermissionResponse
-	(*AttachPermissionRequest)(nil),       // 28: idm.v1.AttachPermissionRequest
-	(*AttachPermissionResponse)(nil),      // 29: idm.v1.AttachPermissionResponse
-	(*DetachPermissionRequest)(nil),       // 30: idm.v1.DetachPermissionRequest
-	(*DetachPermissionResponse)(nil),      // 31: idm.v1.DetachPermissionResponse
+	(*SubjectIdentity)(nil),               // 0: idm.v1.SubjectIdentity
+	(*SearchSubjectsRequest)(nil),         // 1: idm.v1.SearchSubjectsRequest
+	(*SearchSubjectsResponse)(nil),        // 2: idm.v1.SearchSubjectsResponse
+	(*ResolveSubjectsRequest)(nil),        // 3: idm.v1.ResolveSubjectsRequest
+	(*ResolveSubjectsResponse)(nil),       // 4: idm.v1.ResolveSubjectsResponse
+	(*Role)(nil),                          // 5: idm.v1.Role
+	(*Permission)(nil),                    // 6: idm.v1.Permission
+	(*SubjectRoles)(nil),                  // 7: idm.v1.SubjectRoles
+	(*ListRolesRequest)(nil),              // 8: idm.v1.ListRolesRequest
+	(*ListRolesResponse)(nil),             // 9: idm.v1.ListRolesResponse
+	(*ListPermissionsRequest)(nil),        // 10: idm.v1.ListPermissionsRequest
+	(*ListPermissionsResponse)(nil),       // 11: idm.v1.ListPermissionsResponse
+	(*GetRolePermissionsRequest)(nil),     // 12: idm.v1.GetRolePermissionsRequest
+	(*GetRolePermissionsResponse)(nil),    // 13: idm.v1.GetRolePermissionsResponse
+	(*ListSubjectsWithRolesRequest)(nil),  // 14: idm.v1.ListSubjectsWithRolesRequest
+	(*ListSubjectsWithRolesResponse)(nil), // 15: idm.v1.ListSubjectsWithRolesResponse
+	(*GetSubjectRolesRequest)(nil),        // 16: idm.v1.GetSubjectRolesRequest
+	(*GetSubjectRolesResponse)(nil),       // 17: idm.v1.GetSubjectRolesResponse
+	(*CheckAccessRequest)(nil),            // 18: idm.v1.CheckAccessRequest
+	(*CheckAccessResponse)(nil),           // 19: idm.v1.CheckAccessResponse
+	(*AssignRoleRequest)(nil),             // 20: idm.v1.AssignRoleRequest
+	(*AssignRoleResponse)(nil),            // 21: idm.v1.AssignRoleResponse
+	(*RevokeRoleRequest)(nil),             // 22: idm.v1.RevokeRoleRequest
+	(*RevokeRoleResponse)(nil),            // 23: idm.v1.RevokeRoleResponse
+	(*RolePermissions)(nil),               // 24: idm.v1.RolePermissions
+	(*CreateRoleRequest)(nil),             // 25: idm.v1.CreateRoleRequest
+	(*CreateRoleResponse)(nil),            // 26: idm.v1.CreateRoleResponse
+	(*DeleteRoleRequest)(nil),             // 27: idm.v1.DeleteRoleRequest
+	(*DeleteRoleResponse)(nil),            // 28: idm.v1.DeleteRoleResponse
+	(*CreatePermissionRequest)(nil),       // 29: idm.v1.CreatePermissionRequest
+	(*CreatePermissionResponse)(nil),      // 30: idm.v1.CreatePermissionResponse
+	(*DeletePermissionRequest)(nil),       // 31: idm.v1.DeletePermissionRequest
+	(*DeletePermissionResponse)(nil),      // 32: idm.v1.DeletePermissionResponse
+	(*AttachPermissionRequest)(nil),       // 33: idm.v1.AttachPermissionRequest
+	(*AttachPermissionResponse)(nil),      // 34: idm.v1.AttachPermissionResponse
+	(*DetachPermissionRequest)(nil),       // 35: idm.v1.DetachPermissionRequest
+	(*DetachPermissionResponse)(nil),      // 36: idm.v1.DetachPermissionResponse
 }
 var file_idm_v1_idm_proto_depIdxs = []int32{
-	0,  // 0: idm.v1.ListRolesResponse.roles:type_name -> idm.v1.Role
-	1,  // 1: idm.v1.ListPermissionsResponse.permissions:type_name -> idm.v1.Permission
-	1,  // 2: idm.v1.GetRolePermissionsResponse.permissions:type_name -> idm.v1.Permission
-	2,  // 3: idm.v1.ListSubjectsWithRolesResponse.subjects:type_name -> idm.v1.SubjectRoles
-	1,  // 4: idm.v1.RolePermissions.permissions:type_name -> idm.v1.Permission
-	0,  // 5: idm.v1.CreateRoleResponse.role:type_name -> idm.v1.Role
-	1,  // 6: idm.v1.CreatePermissionResponse.permission:type_name -> idm.v1.Permission
-	19, // 7: idm.v1.AttachPermissionResponse.role_permissions:type_name -> idm.v1.RolePermissions
-	19, // 8: idm.v1.DetachPermissionResponse.role_permissions:type_name -> idm.v1.RolePermissions
-	13, // 9: idm.v1.AccessService.CheckAccess:input_type -> idm.v1.CheckAccessRequest
-	15, // 10: idm.v1.RoleAdminService.AssignRole:input_type -> idm.v1.AssignRoleRequest
-	17, // 11: idm.v1.RoleAdminService.RevokeRole:input_type -> idm.v1.RevokeRoleRequest
-	3,  // 12: idm.v1.IamAdminService.ListRoles:input_type -> idm.v1.ListRolesRequest
-	5,  // 13: idm.v1.IamAdminService.ListPermissions:input_type -> idm.v1.ListPermissionsRequest
-	7,  // 14: idm.v1.IamAdminService.GetRolePermissions:input_type -> idm.v1.GetRolePermissionsRequest
-	9,  // 15: idm.v1.IamAdminService.ListSubjectsWithRoles:input_type -> idm.v1.ListSubjectsWithRolesRequest
-	11, // 16: idm.v1.IamAdminService.GetSubjectRoles:input_type -> idm.v1.GetSubjectRolesRequest
-	20, // 17: idm.v1.IamCatalogService.CreateRole:input_type -> idm.v1.CreateRoleRequest
-	22, // 18: idm.v1.IamCatalogService.DeleteRole:input_type -> idm.v1.DeleteRoleRequest
-	24, // 19: idm.v1.IamCatalogService.CreatePermission:input_type -> idm.v1.CreatePermissionRequest
-	26, // 20: idm.v1.IamCatalogService.DeletePermission:input_type -> idm.v1.DeletePermissionRequest
-	28, // 21: idm.v1.IamCatalogService.AttachPermission:input_type -> idm.v1.AttachPermissionRequest
-	30, // 22: idm.v1.IamCatalogService.DetachPermission:input_type -> idm.v1.DetachPermissionRequest
-	14, // 23: idm.v1.AccessService.CheckAccess:output_type -> idm.v1.CheckAccessResponse
-	16, // 24: idm.v1.RoleAdminService.AssignRole:output_type -> idm.v1.AssignRoleResponse
-	18, // 25: idm.v1.RoleAdminService.RevokeRole:output_type -> idm.v1.RevokeRoleResponse
-	4,  // 26: idm.v1.IamAdminService.ListRoles:output_type -> idm.v1.ListRolesResponse
-	6,  // 27: idm.v1.IamAdminService.ListPermissions:output_type -> idm.v1.ListPermissionsResponse
-	8,  // 28: idm.v1.IamAdminService.GetRolePermissions:output_type -> idm.v1.GetRolePermissionsResponse
-	10, // 29: idm.v1.IamAdminService.ListSubjectsWithRoles:output_type -> idm.v1.ListSubjectsWithRolesResponse
-	12, // 30: idm.v1.IamAdminService.GetSubjectRoles:output_type -> idm.v1.GetSubjectRolesResponse
-	21, // 31: idm.v1.IamCatalogService.CreateRole:output_type -> idm.v1.CreateRoleResponse
-	23, // 32: idm.v1.IamCatalogService.DeleteRole:output_type -> idm.v1.DeleteRoleResponse
-	25, // 33: idm.v1.IamCatalogService.CreatePermission:output_type -> idm.v1.CreatePermissionResponse
-	27, // 34: idm.v1.IamCatalogService.DeletePermission:output_type -> idm.v1.DeletePermissionResponse
-	29, // 35: idm.v1.IamCatalogService.AttachPermission:output_type -> idm.v1.AttachPermissionResponse
-	31, // 36: idm.v1.IamCatalogService.DetachPermission:output_type -> idm.v1.DetachPermissionResponse
-	23, // [23:37] is the sub-list for method output_type
-	9,  // [9:23] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	0,  // 0: idm.v1.SearchSubjectsResponse.subjects:type_name -> idm.v1.SubjectIdentity
+	0,  // 1: idm.v1.ResolveSubjectsResponse.subjects:type_name -> idm.v1.SubjectIdentity
+	5,  // 2: idm.v1.ListRolesResponse.roles:type_name -> idm.v1.Role
+	6,  // 3: idm.v1.ListPermissionsResponse.permissions:type_name -> idm.v1.Permission
+	6,  // 4: idm.v1.GetRolePermissionsResponse.permissions:type_name -> idm.v1.Permission
+	7,  // 5: idm.v1.ListSubjectsWithRolesResponse.subjects:type_name -> idm.v1.SubjectRoles
+	6,  // 6: idm.v1.RolePermissions.permissions:type_name -> idm.v1.Permission
+	5,  // 7: idm.v1.CreateRoleResponse.role:type_name -> idm.v1.Role
+	6,  // 8: idm.v1.CreatePermissionResponse.permission:type_name -> idm.v1.Permission
+	24, // 9: idm.v1.AttachPermissionResponse.role_permissions:type_name -> idm.v1.RolePermissions
+	24, // 10: idm.v1.DetachPermissionResponse.role_permissions:type_name -> idm.v1.RolePermissions
+	18, // 11: idm.v1.AccessService.CheckAccess:input_type -> idm.v1.CheckAccessRequest
+	20, // 12: idm.v1.RoleAdminService.AssignRole:input_type -> idm.v1.AssignRoleRequest
+	22, // 13: idm.v1.RoleAdminService.RevokeRole:input_type -> idm.v1.RevokeRoleRequest
+	8,  // 14: idm.v1.IamAdminService.ListRoles:input_type -> idm.v1.ListRolesRequest
+	10, // 15: idm.v1.IamAdminService.ListPermissions:input_type -> idm.v1.ListPermissionsRequest
+	12, // 16: idm.v1.IamAdminService.GetRolePermissions:input_type -> idm.v1.GetRolePermissionsRequest
+	14, // 17: idm.v1.IamAdminService.ListSubjectsWithRoles:input_type -> idm.v1.ListSubjectsWithRolesRequest
+	16, // 18: idm.v1.IamAdminService.GetSubjectRoles:input_type -> idm.v1.GetSubjectRolesRequest
+	25, // 19: idm.v1.IamCatalogService.CreateRole:input_type -> idm.v1.CreateRoleRequest
+	27, // 20: idm.v1.IamCatalogService.DeleteRole:input_type -> idm.v1.DeleteRoleRequest
+	29, // 21: idm.v1.IamCatalogService.CreatePermission:input_type -> idm.v1.CreatePermissionRequest
+	31, // 22: idm.v1.IamCatalogService.DeletePermission:input_type -> idm.v1.DeletePermissionRequest
+	33, // 23: idm.v1.IamCatalogService.AttachPermission:input_type -> idm.v1.AttachPermissionRequest
+	35, // 24: idm.v1.IamCatalogService.DetachPermission:input_type -> idm.v1.DetachPermissionRequest
+	1,  // 25: idm.v1.IdentityService.SearchSubjects:input_type -> idm.v1.SearchSubjectsRequest
+	3,  // 26: idm.v1.IdentityService.ResolveSubjects:input_type -> idm.v1.ResolveSubjectsRequest
+	19, // 27: idm.v1.AccessService.CheckAccess:output_type -> idm.v1.CheckAccessResponse
+	21, // 28: idm.v1.RoleAdminService.AssignRole:output_type -> idm.v1.AssignRoleResponse
+	23, // 29: idm.v1.RoleAdminService.RevokeRole:output_type -> idm.v1.RevokeRoleResponse
+	9,  // 30: idm.v1.IamAdminService.ListRoles:output_type -> idm.v1.ListRolesResponse
+	11, // 31: idm.v1.IamAdminService.ListPermissions:output_type -> idm.v1.ListPermissionsResponse
+	13, // 32: idm.v1.IamAdminService.GetRolePermissions:output_type -> idm.v1.GetRolePermissionsResponse
+	15, // 33: idm.v1.IamAdminService.ListSubjectsWithRoles:output_type -> idm.v1.ListSubjectsWithRolesResponse
+	17, // 34: idm.v1.IamAdminService.GetSubjectRoles:output_type -> idm.v1.GetSubjectRolesResponse
+	26, // 35: idm.v1.IamCatalogService.CreateRole:output_type -> idm.v1.CreateRoleResponse
+	28, // 36: idm.v1.IamCatalogService.DeleteRole:output_type -> idm.v1.DeleteRoleResponse
+	30, // 37: idm.v1.IamCatalogService.CreatePermission:output_type -> idm.v1.CreatePermissionResponse
+	32, // 38: idm.v1.IamCatalogService.DeletePermission:output_type -> idm.v1.DeletePermissionResponse
+	34, // 39: idm.v1.IamCatalogService.AttachPermission:output_type -> idm.v1.AttachPermissionResponse
+	36, // 40: idm.v1.IamCatalogService.DetachPermission:output_type -> idm.v1.DetachPermissionResponse
+	2,  // 41: idm.v1.IdentityService.SearchSubjects:output_type -> idm.v1.SearchSubjectsResponse
+	4,  // 42: idm.v1.IdentityService.ResolveSubjects:output_type -> idm.v1.ResolveSubjectsResponse
+	27, // [27:43] is the sub-list for method output_type
+	11, // [11:27] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_idm_v1_idm_proto_init() }
@@ -1792,9 +2126,9 @@ func file_idm_v1_idm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_idm_v1_idm_proto_rawDesc), len(file_idm_v1_idm_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   37,
 			NumExtensions: 0,
-			NumServices:   4,
+			NumServices:   5,
 		},
 		GoTypes:           file_idm_v1_idm_proto_goTypes,
 		DependencyIndexes: file_idm_v1_idm_proto_depIdxs,

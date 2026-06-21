@@ -921,3 +921,181 @@ var IamCatalogService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "idm/v1/idm.proto",
 }
+
+const (
+	IdentityService_SearchSubjects_FullMethodName  = "/idm.v1.IdentityService/SearchSubjects"
+	IdentityService_ResolveSubjects_FullMethodName = "/idm.v1.IdentityService/ResolveSubjects"
+)
+
+// IdentityServiceClient is the client API for IdentityService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// IdentityService — читающий контракт справочника субъектов из каталога
+// идентичностей (OIDC/Keycloak, ADR-0016). Резолвит канонический ключ субъекта
+// (sub из JWT, он же subject_roles.subject) в человекочитаемую идентичность
+// (username/email/display name) и ищет пользователей realm для пикера назначения
+// роли. Источник правды — живой запрос в Keycloak Admin REST + кэш с TTL
+// (ОТДЕЛЬНЫЙ от кэша решений RBAC). Путь привилегированный: gateway проверяет
+// право (read, iam:directory) перед КАЖДОЙ ручкой (fail-closed). Справочник НЕ
+// критичен для CheckAccess (решение по sub не зависит от имён): при недоступном
+// Keycloak ручки деградируют (Unavailable), управление ролями по сырому subject
+// не ломается. Расширение аддитивно (wire-совместимо): новый сервис и сообщения,
+// существующие RPC не меняются.
+type IdentityServiceClient interface {
+	// SearchSubjects ищет пользователей каталога по строке (username/email/имя) с
+	// постраничной выдачей. Пустой/слишком короткий query или превышение лимита
+	// page_size → InvalidArgument; недоступность Keycloak → Unavailable.
+	SearchSubjects(ctx context.Context, in *SearchSubjectsRequest, opts ...grpc.CallOption) (*SearchSubjectsResponse, error)
+	// ResolveSubjects резолвит набор канонических ключей (sub) в идентичности
+	// (батч). Отсутствующий в каталоге субъект возвращается с found=false (не
+	// опускается) — «осиротевший». Пустой список → InvalidArgument; недоступность
+	// Keycloak → Unavailable.
+	ResolveSubjects(ctx context.Context, in *ResolveSubjectsRequest, opts ...grpc.CallOption) (*ResolveSubjectsResponse, error)
+}
+
+type identityServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewIdentityServiceClient(cc grpc.ClientConnInterface) IdentityServiceClient {
+	return &identityServiceClient{cc}
+}
+
+func (c *identityServiceClient) SearchSubjects(ctx context.Context, in *SearchSubjectsRequest, opts ...grpc.CallOption) (*SearchSubjectsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchSubjectsResponse)
+	err := c.cc.Invoke(ctx, IdentityService_SearchSubjects_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *identityServiceClient) ResolveSubjects(ctx context.Context, in *ResolveSubjectsRequest, opts ...grpc.CallOption) (*ResolveSubjectsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveSubjectsResponse)
+	err := c.cc.Invoke(ctx, IdentityService_ResolveSubjects_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// IdentityServiceServer is the server API for IdentityService service.
+// All implementations must embed UnimplementedIdentityServiceServer
+// for forward compatibility.
+//
+// IdentityService — читающий контракт справочника субъектов из каталога
+// идентичностей (OIDC/Keycloak, ADR-0016). Резолвит канонический ключ субъекта
+// (sub из JWT, он же subject_roles.subject) в человекочитаемую идентичность
+// (username/email/display name) и ищет пользователей realm для пикера назначения
+// роли. Источник правды — живой запрос в Keycloak Admin REST + кэш с TTL
+// (ОТДЕЛЬНЫЙ от кэша решений RBAC). Путь привилегированный: gateway проверяет
+// право (read, iam:directory) перед КАЖДОЙ ручкой (fail-closed). Справочник НЕ
+// критичен для CheckAccess (решение по sub не зависит от имён): при недоступном
+// Keycloak ручки деградируют (Unavailable), управление ролями по сырому subject
+// не ломается. Расширение аддитивно (wire-совместимо): новый сервис и сообщения,
+// существующие RPC не меняются.
+type IdentityServiceServer interface {
+	// SearchSubjects ищет пользователей каталога по строке (username/email/имя) с
+	// постраничной выдачей. Пустой/слишком короткий query или превышение лимита
+	// page_size → InvalidArgument; недоступность Keycloak → Unavailable.
+	SearchSubjects(context.Context, *SearchSubjectsRequest) (*SearchSubjectsResponse, error)
+	// ResolveSubjects резолвит набор канонических ключей (sub) в идентичности
+	// (батч). Отсутствующий в каталоге субъект возвращается с found=false (не
+	// опускается) — «осиротевший». Пустой список → InvalidArgument; недоступность
+	// Keycloak → Unavailable.
+	ResolveSubjects(context.Context, *ResolveSubjectsRequest) (*ResolveSubjectsResponse, error)
+	mustEmbedUnimplementedIdentityServiceServer()
+}
+
+// UnimplementedIdentityServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedIdentityServiceServer struct{}
+
+func (UnimplementedIdentityServiceServer) SearchSubjects(context.Context, *SearchSubjectsRequest) (*SearchSubjectsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchSubjects not implemented")
+}
+func (UnimplementedIdentityServiceServer) ResolveSubjects(context.Context, *ResolveSubjectsRequest) (*ResolveSubjectsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveSubjects not implemented")
+}
+func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
+func (UnimplementedIdentityServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeIdentityServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to IdentityServiceServer will
+// result in compilation errors.
+type UnsafeIdentityServiceServer interface {
+	mustEmbedUnimplementedIdentityServiceServer()
+}
+
+func RegisterIdentityServiceServer(s grpc.ServiceRegistrar, srv IdentityServiceServer) {
+	// If the following call panics, it indicates UnimplementedIdentityServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&IdentityService_ServiceDesc, srv)
+}
+
+func _IdentityService_SearchSubjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchSubjectsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).SearchSubjects(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_SearchSubjects_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).SearchSubjects(ctx, req.(*SearchSubjectsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IdentityService_ResolveSubjects_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveSubjectsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).ResolveSubjects(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IdentityService_ResolveSubjects_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IdentityServiceServer).ResolveSubjects(ctx, req.(*ResolveSubjectsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// IdentityService_ServiceDesc is the grpc.ServiceDesc for IdentityService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var IdentityService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "idm.v1.IdentityService",
+	HandlerType: (*IdentityServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SearchSubjects",
+			Handler:    _IdentityService_SearchSubjects_Handler,
+		},
+		{
+			MethodName: "ResolveSubjects",
+			Handler:    _IdentityService_ResolveSubjects_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "idm/v1/idm.proto",
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	idmv1 "github.com/YuriB9/idp/pkg/api/idm/v1"
+	"github.com/YuriB9/idp/pkg/logger"
 )
 
 // iamResource — горизонтальный ресурс полномочий IAM-админки (ADR-0014).
@@ -64,9 +65,14 @@ type permissionListView struct {
 }
 
 // subjectRolesView — субъект и набор имён его ролей (схема SubjectRoles).
+// Identity — опциональная идентичность из каталога (ADR-0016): присутствует
+// только при обогащении (вызывающий держит (read, iam:directory) и Keycloak
+// доступен); иначе опускается (без утечки PII / деградация). Для «осиротевшего»
+// субъекта Identity присутствует с found=false.
 type subjectRolesView struct {
-	Subject string   `json:"subject"`
-	Roles   []string `json:"roles"`
+	Subject  string                `json:"subject"`
+	Roles    []string              `json:"roles"`
+	Identity *directorySubjectView `json:"identity,omitempty"`
 }
 
 // subjectListView — страница субъектов с ролями и курсором (схема SubjectList).
@@ -92,6 +98,8 @@ func (a *servicesAPI) registerIAM(r chi.Router) {
 	r.Delete("/iam/roles/{role}/permissions", a.iamDetachPermission)
 	r.Post("/iam/permissions", a.iamCreatePermission)
 	r.Delete("/iam/permissions", a.iamDeletePermission)
+	// Справочник субъектов из каталога Keycloak (ADR-0016) — под (read, iam:directory).
+	a.registerIAMDirectory(r)
 }
 
 // iamListRoles — GET /iam/roles: список ролей каталога (read-only).
@@ -167,7 +175,47 @@ func (a *servicesAPI) iamListSubjects(w http.ResponseWriter, r *http.Request) {
 			Roles:   rolesOrEmpty(s.GetRoles()),
 		})
 	}
+	// Обогащение идентичностями (ADR-0016) — ТОЛЬКО при наличии (read,
+	// iam:directory): без этого права ответ остаётся «сырым» (PII не раскрывается).
+	// При недоступном Keycloak обогащение деградирует (ответ без идентичностей),
+	// управление ролями по сырому subject не ломается.
+	if len(out.Subjects) > 0 && a.hasAccess(r, iamDirectoryResource, "read") {
+		a.enrichSubjects(r, out.Subjects)
+	}
 	a.writeJSON(w, http.StatusOK, out)
+}
+
+// enrichSubjects дополняет субъектов идентичностями из каталога (резолв батчем).
+// Недоступность Keycloak → деградация (идентичности не добавляются). Осиротевшие
+// субъекты получают Identity с found=false.
+func (a *servicesAPI) enrichSubjects(r *http.Request, subjects []subjectRolesView) {
+	subs := make([]string, 0, len(subjects))
+	for _, s := range subjects {
+		subs = append(subs, s.Subject)
+	}
+	resp, err := a.identity.ResolveSubjects(r.Context(), &idmv1.ResolveSubjectsRequest{Subjects: subs})
+	if err != nil {
+		// Деградация: каталог недоступен — отдаём роли без идентичностей.
+		a.log.Warn("gateway: обогащение субъектов недоступно (деградация)", logger.Err(err))
+		return
+	}
+	byID := make(map[string]*idmv1.SubjectIdentity, len(resp.GetSubjects()))
+	for _, id := range resp.GetSubjects() {
+		byID[id.GetSubject()] = id
+	}
+	for i := range subjects {
+		if id, ok := byID[subjects[i].Subject]; ok {
+			view := directorySubjectView{
+				Subject:     id.GetSubject(),
+				Username:    id.GetUsername(),
+				Email:       id.GetEmail(),
+				DisplayName: id.GetDisplayName(),
+				Enabled:     id.GetEnabled(),
+				Found:       id.GetFound(),
+			}
+			subjects[i].Identity = &view
+		}
+	}
 }
 
 // iamSubjectRoles — GET /iam/subjects/{subject}/roles: роли конкретного субъекта.

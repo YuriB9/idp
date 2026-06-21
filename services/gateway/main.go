@@ -62,6 +62,7 @@ func run() error {
 		iamAdmin:   idmv1.NewIamAdminServiceClient(idmConn),
 		iamCatalog: idmv1.NewIamCatalogServiceClient(idmConn),
 		roleAdmin:  idmv1.NewRoleAdminServiceClient(idmConn),
+		identity:   idmv1.NewIdentityServiceClient(idmConn),
 		log:        log,
 	}
 

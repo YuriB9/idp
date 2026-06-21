@@ -32,6 +32,7 @@ type servicesAPI struct {
 	iamAdmin   idmv1.IamAdminServiceClient
 	iamCatalog idmv1.IamCatalogServiceClient
 	roleAdmin  idmv1.RoleAdminServiceClient
+	identity   idmv1.IdentityServiceClient
 	log        *slog.Logger
 }
 
