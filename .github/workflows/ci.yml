@@ -4,7 +4,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 permissions:
@@ -108,6 +108,21 @@ jobs:
         env:
           GOWORK: "off"
         run: govulncheck ./...
+
+  openapi-lint:
+    name: openapi lint (Spectral)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: install web deps (pinned Spectral)
+        working-directory: web
+        run: npm ci
+      - name: spectral lint openapi/openapi.yaml
+        working-directory: web
+        run: npm run lint:openapi
 
   codegen-check:
     name: codegen reproducibility (.proto + OpenAPI)

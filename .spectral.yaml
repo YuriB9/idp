@@ -1,0 +1,27 @@
+# Конфигурация Spectral для линтинга спецификации периметра (openapi/openapi.yaml,
+# ADR-0009). Закрывает разрыв, который не ловит codegen-check: спека может быть
+# валидным YAML и парситься, но содержать недокументированный метод (без
+# description/operationId) или операцию без success-ответа. Базовый ruleset
+# spectral:oas (структурная валидация OpenAPI 3.1) + ужесточение ключевых правил
+# до error. Шумные стилевые правила (теги/контакты/лицензия) отключены, чтобы CI
+# падал по существу, а не по косметике.
+extends: ["spectral:oas"]
+
+rules:
+  # Каждая операция ОБЯЗАНА быть описана (description), иметь operationId
+  # (стабильный для кодогена TS-клиента) и хотя бы один success-ответ.
+  operation-description: error
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-success-response: error
+  # Структурная валидность и ссылочная целостность — блокирующие.
+  oas3-schema: error
+  no-$ref-siblings: error
+
+  # Косметические/стилевые правила — отключаем (в MVP не нужны, дают шум).
+  operation-tags: "off"
+  info-contact: "off"
+  contact-properties: "off"
+  info-license: "off"
+  license-url: "off"
+  oas3-api-servers: "off"

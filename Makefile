@@ -14,7 +14,7 @@ IDM_MIGRATIONS := $(CURDIR)/services/idm/migrations
 # GOOSE_CMD — команда goose (up|down|status|...).
 GOOSE_CMD ?= up
 
-.PHONY: tools proto openapi gen test lint tidy tidy-check migrate-projects migrate-idm
+.PHONY: tools proto openapi gen test lint lint-openapi tidy tidy-check migrate-projects migrate-idm
 
 ## tools: собрать пинованные инструменты кодогена в tools/bin
 tools:
@@ -41,6 +41,12 @@ proto: tools
 ## openapi: сгенерировать TS-клиент и zod-схемы из OpenAPI
 openapi:
 	cd web && npm run gen
+
+## lint-openapi: линтинг спецификации периметра Spectral (ADR-0009).
+## Требует установленных зависимостей web (npm ci). Падает на error-правилах:
+## недокументированный метод (description/operationId), битая структура OpenAPI.
+lint-openapi:
+	cd web && npm run lint:openapi
 
 ## gen: весь кодоген
 gen: proto openapi
