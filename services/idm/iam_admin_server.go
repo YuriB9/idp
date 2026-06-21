@@ -45,7 +45,7 @@ func (s *iamAdminServer) ListRoles(ctx context.Context, _ *idmv1.ListRolesReques
 	}
 	out := make([]*idmv1.Role, 0, len(roles))
 	for _, r := range roles {
-		out = append(out, &idmv1.Role{Name: r.Name})
+		out = append(out, &idmv1.Role{Name: r.Name, System: r.System})
 	}
 	return &idmv1.ListRolesResponse{Roles: out}, nil
 }
@@ -103,7 +103,7 @@ func (s *iamAdminServer) GetSubjectRoles(ctx context.Context, req *idmv1.GetSubj
 func toProtoPermissions(perms []repository.Permission) []*idmv1.Permission {
 	out := make([]*idmv1.Permission, 0, len(perms))
 	for _, p := range perms {
-		out = append(out, &idmv1.Permission{Action: p.Action, Resource: p.Resource})
+		out = append(out, &idmv1.Permission{Action: p.Action, Resource: p.Resource, System: p.System})
 	}
 	return out
 }

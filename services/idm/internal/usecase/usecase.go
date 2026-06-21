@@ -8,6 +8,8 @@ import (
 	"fmt"
 
 	"golang.org/x/sync/singleflight"
+
+	"github.com/YuriB9/idp/services/idm/internal/repository"
 )
 
 // Repo читает решение из БД (deny-by-default на уровне модели).
@@ -104,6 +106,113 @@ func (m *RoleManager) RevokeRole(ctx context.Context, subject, role string) erro
 	}
 	if err := m.cache.InvalidateSubject(ctx, subject); err != nil {
 		return fmt.Errorf("usecase: инвалидация кэша после отзыва роли: %w", err)
+	}
+	return nil
+}
+
+// CatalogStore — зависимость управления структурой каталога RBAC: создание/удаление
+// ролей и прав, правка набора прав роли. Многошаговые записи выполняются в
+// транзакции на уровне репозитория.
+type CatalogStore interface {
+	CreateRole(ctx context.Context, name string) (repository.Role, error)
+	DeleteRole(ctx context.Context, name string) error
+	CreatePermission(ctx context.Context, action, resource string) (repository.Permission, error)
+	DeletePermission(ctx context.Context, action, resource string) error
+	AttachPermission(ctx context.Context, role, action, resource string) ([]repository.Permission, error)
+	DetachPermission(ctx context.Context, role, action, resource string) ([]repository.Permission, error)
+}
+
+// BroadInvalidator инвалидирует кэш решений ШИРОКО (инкремент поколения). Правка
+// каталога (role_permissions/удаление роли/права) затрагивает ВСЕХ носителей роли,
+// поэтому точечной инвалидации по субъекту недостаточно.
+type BroadInvalidator interface {
+	InvalidateAll(ctx context.Context) error
+}
+
+// CatalogManager управляет структурой каталога RBAC с ОБЯЗАТЕЛЬНОЙ широкой
+// инвалидацией кэша решений после КАЖДОЙ успешной структурной мутации (ADR-0015):
+// правка role_permissions/удаление роли/права затрагивает все носители роли, и
+// устаревший allow/deny оставлять нельзя. Инвалидация выполняется ПОСЛЕ успешной
+// записи (откат записи → кэш не трогаем); ошибка инвалидации возвращается
+// вызывающему. Чтение каталога идёт мимо менеджера (без эффектов на кэш).
+type CatalogManager struct {
+	store CatalogStore
+	cache BroadInvalidator
+}
+
+// NewCatalogManager создаёт менеджер каталога поверх стора и широкого инвалидатора.
+func NewCatalogManager(store CatalogStore, cache BroadInvalidator) *CatalogManager {
+	return &CatalogManager{store: store, cache: cache}
+}
+
+// CreateRole создаёт роль и широко инвалидирует кэш.
+func (m *CatalogManager) CreateRole(ctx context.Context, name string) (repository.Role, error) {
+	role, err := m.store.CreateRole(ctx, name)
+	if err != nil {
+		return repository.Role{}, fmt.Errorf("usecase: создание роли: %w", err)
+	}
+	if err := m.invalidate(ctx); err != nil {
+		return repository.Role{}, err
+	}
+	return role, nil
+}
+
+// DeleteRole удаляет роль (каскад на уровне БД) и широко инвалидирует кэш.
+func (m *CatalogManager) DeleteRole(ctx context.Context, name string) error {
+	if err := m.store.DeleteRole(ctx, name); err != nil {
+		return fmt.Errorf("usecase: удаление роли: %w", err)
+	}
+	return m.invalidate(ctx)
+}
+
+// CreatePermission создаёт право и широко инвалидирует кэш.
+func (m *CatalogManager) CreatePermission(ctx context.Context, action, resource string) (repository.Permission, error) {
+	perm, err := m.store.CreatePermission(ctx, action, resource)
+	if err != nil {
+		return repository.Permission{}, fmt.Errorf("usecase: создание права: %w", err)
+	}
+	if err := m.invalidate(ctx); err != nil {
+		return repository.Permission{}, err
+	}
+	return perm, nil
+}
+
+// DeletePermission удаляет право (каскад на уровне БД) и широко инвалидирует кэш.
+func (m *CatalogManager) DeletePermission(ctx context.Context, action, resource string) error {
+	if err := m.store.DeletePermission(ctx, action, resource); err != nil {
+		return fmt.Errorf("usecase: удаление права: %w", err)
+	}
+	return m.invalidate(ctx)
+}
+
+// AttachPermission прикрепляет право к роли (идемпотентно) и широко инвалидирует кэш.
+func (m *CatalogManager) AttachPermission(ctx context.Context, role, action, resource string) ([]repository.Permission, error) {
+	perms, err := m.store.AttachPermission(ctx, role, action, resource)
+	if err != nil {
+		return nil, fmt.Errorf("usecase: прикрепление права: %w", err)
+	}
+	if err := m.invalidate(ctx); err != nil {
+		return nil, err
+	}
+	return perms, nil
+}
+
+// DetachPermission открепляет право от роли (идемпотентно) и широко инвалидирует кэш.
+func (m *CatalogManager) DetachPermission(ctx context.Context, role, action, resource string) ([]repository.Permission, error) {
+	perms, err := m.store.DetachPermission(ctx, role, action, resource)
+	if err != nil {
+		return nil, fmt.Errorf("usecase: открепление права: %w", err)
+	}
+	if err := m.invalidate(ctx); err != nil {
+		return nil, err
+	}
+	return perms, nil
+}
+
+// invalidate выполняет широкую инвалидацию кэша после структурной мутации.
+func (m *CatalogManager) invalidate(ctx context.Context) error {
+	if err := m.cache.InvalidateAll(ctx); err != nil {
+		return fmt.Errorf("usecase: широкая инвалидация кэша после правки каталога: %w", err)
 	}
 	return nil
 }

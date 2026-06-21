@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/YuriB9/idp/services/idm/internal/repository"
 	"github.com/YuriB9/idp/services/idm/internal/usecase"
 )
 
@@ -150,6 +151,113 @@ func TestRoleManager_AssignErrorSkipsInvalidation(t *testing.T) {
 	}
 	if len(inv.invalidated) != 0 {
 		t.Fatalf("при ошибке выдачи кэш не должен инвалидироваться, получили %v", inv.invalidated)
+	}
+}
+
+// fakeCatalogStore — стаб CatalogStore с подсчётом вызовов и управляемой ошибкой.
+type fakeCatalogStore struct {
+	err   error
+	calls atomic.Int64
+}
+
+func (s *fakeCatalogStore) CreateRole(_ context.Context, name string) (repository.Role, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return repository.Role{}, s.err
+	}
+	return repository.Role{Name: name}, nil
+}
+func (s *fakeCatalogStore) DeleteRole(_ context.Context, _ string) error {
+	s.calls.Add(1)
+	return s.err
+}
+func (s *fakeCatalogStore) CreatePermission(_ context.Context, action, resource string) (repository.Permission, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return repository.Permission{}, s.err
+	}
+	return repository.Permission{Action: action, Resource: resource}, nil
+}
+func (s *fakeCatalogStore) DeletePermission(_ context.Context, _, _ string) error {
+	s.calls.Add(1)
+	return s.err
+}
+func (s *fakeCatalogStore) AttachPermission(_ context.Context, _, _, _ string) ([]repository.Permission, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []repository.Permission{}, nil
+}
+func (s *fakeCatalogStore) DetachPermission(_ context.Context, _, _, _ string) ([]repository.Permission, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []repository.Permission{}, nil
+}
+
+// fakeBroadInvalidator — стаб широкой инвалидации (поколение) с подсчётом.
+type fakeBroadInvalidator struct {
+	calls atomic.Int64
+	err   error
+}
+
+func (i *fakeBroadInvalidator) InvalidateAll(_ context.Context) error {
+	if i.err != nil {
+		return i.err
+	}
+	i.calls.Add(1)
+	return nil
+}
+
+// TestCatalogManager_MutationsInvalidateBroadly: КАЖДАЯ успешная структурная
+// мутация каталога инкрементит поколение (широкая инвалидация), т.к. правка
+// затрагивает всех носителей роли. Точечная инвалидация по субъекту здесь не нужна.
+func TestCatalogManager_MutationsInvalidateBroadly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func(m *usecase.CatalogManager) error
+	}{
+		{"CreateRole", func(m *usecase.CatalogManager) error { _, err := m.CreateRole(ctx, "r"); return err }},
+		{"DeleteRole", func(m *usecase.CatalogManager) error { return m.DeleteRole(ctx, "r") }},
+		{"CreatePermission", func(m *usecase.CatalogManager) error { _, err := m.CreatePermission(ctx, "a", "res"); return err }},
+		{"DeletePermission", func(m *usecase.CatalogManager) error { return m.DeletePermission(ctx, "a", "res") }},
+		{"AttachPermission", func(m *usecase.CatalogManager) error { _, err := m.AttachPermission(ctx, "r", "a", "res"); return err }},
+		{"DetachPermission", func(m *usecase.CatalogManager) error { _, err := m.DetachPermission(ctx, "r", "a", "res"); return err }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := &fakeCatalogStore{}
+			inv := &fakeBroadInvalidator{}
+			m := usecase.NewCatalogManager(store, inv)
+			if err := tt.call(m); err != nil {
+				t.Fatalf("%s: %v", tt.name, err)
+			}
+			if inv.calls.Load() != 1 {
+				t.Fatalf("ожидали одну широкую инвалидацию поколения, получили %d", inv.calls.Load())
+			}
+		})
+	}
+}
+
+// TestCatalogManager_ErrorSkipsInvalidation: ошибка стора пробрасывается, широкая
+// инвалидация не выполняется (откат записи → кэш не трогаем).
+func TestCatalogManager_ErrorSkipsInvalidation(t *testing.T) {
+	t.Parallel()
+	store := &fakeCatalogStore{err: errors.New("db down")}
+	inv := &fakeBroadInvalidator{}
+	m := usecase.NewCatalogManager(store, inv)
+
+	if _, err := m.CreateRole(context.Background(), "r"); err == nil {
+		t.Fatal("ожидали ошибку создания роли")
+	}
+	if inv.calls.Load() != 0 {
+		t.Fatalf("при ошибке записи кэш не должен инвалидироваться, получили %d", inv.calls.Load())
 	}
 }
 

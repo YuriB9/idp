@@ -27,11 +27,12 @@ import (
 // (IamAdmin) и управления ролями (RoleAdmin). Создаётся один раз в main и
 // навешивается на роутер.
 type servicesAPI struct {
-	client    projectsv1.ProjectsServiceClient
-	idm       idmv1.AccessServiceClient
-	iamAdmin  idmv1.IamAdminServiceClient
-	roleAdmin idmv1.RoleAdminServiceClient
-	log       *slog.Logger
+	client     projectsv1.ProjectsServiceClient
+	idm        idmv1.AccessServiceClient
+	iamAdmin   idmv1.IamAdminServiceClient
+	iamCatalog idmv1.IamCatalogServiceClient
+	roleAdmin  idmv1.RoleAdminServiceClient
+	log        *slog.Logger
 }
 
 // authorize выполняет RBAC-проверку IDM перед project-scoped операцией периметра:

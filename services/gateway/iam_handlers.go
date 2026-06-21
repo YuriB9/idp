@@ -7,6 +7,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -18,13 +19,36 @@ import (
 const iamResource = "iam:global"
 
 // roleView — представление роли для клиента (схема Role): стабильный идентификатор
-// — имя; внутренний id наружу не отдаётся.
+// — имя; внутренний id наружу не отдаётся. System — признак системной
+// (сидированной) роли: для таких UI скрывает удаление/правку прав (ADR-0015).
 type roleView struct {
+	Name   string `json:"name"`
+	System bool   `json:"system"`
+}
+
+// permissionView — представление права (схема Permission). System — признак
+// системного (сидированного) права (защищено от удаления).
+type permissionView struct {
+	Action   string `json:"action"`
+	Resource string `json:"resource"`
+	System   bool   `json:"system"`
+}
+
+// rolePermissionsView — роль и актуальный набор её прав (схема RolePermissions);
+// ответ attach/detach.
+type rolePermissionsView struct {
+	Role        string           `json:"role"`
+	Permissions []permissionView `json:"permissions"`
+}
+
+// roleNameBody — тело запроса создания роли (схема CreateRoleRequest).
+type roleNameBody struct {
 	Name string `json:"name"`
 }
 
-// permissionView — представление права (схема Permission).
-type permissionView struct {
+// permissionBody — тело запроса создания права / прикрепления права к роли
+// (схемы CreatePermissionRequest / AttachPermissionRequest).
+type permissionBody struct {
 	Action   string `json:"action"`
 	Resource string `json:"resource"`
 }
@@ -61,6 +85,13 @@ func (a *servicesAPI) registerIAM(r chi.Router) {
 	r.Get("/iam/subjects/{subject}/roles", a.iamSubjectRoles)
 	r.Post("/iam/subjects/{subject}/roles/{role}", a.iamAssignRole)
 	r.Delete("/iam/subjects/{subject}/roles/{role}", a.iamRevokeRole)
+	// Структурные мутации каталога (ADR-0015) — под (manage, iam:global).
+	r.Post("/iam/roles", a.iamCreateRole)
+	r.Delete("/iam/roles/{role}", a.iamDeleteRole)
+	r.Post("/iam/roles/{role}/permissions", a.iamAttachPermission)
+	r.Delete("/iam/roles/{role}/permissions", a.iamDetachPermission)
+	r.Post("/iam/permissions", a.iamCreatePermission)
+	r.Delete("/iam/permissions", a.iamDeletePermission)
 }
 
 // iamListRoles — GET /iam/roles: список ролей каталога (read-only).
@@ -75,7 +106,7 @@ func (a *servicesAPI) iamListRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	out := roleListView{Roles: make([]roleView, 0, len(resp.GetRoles()))}
 	for _, role := range resp.GetRoles() {
-		out.Roles = append(out.Roles, roleView{Name: role.GetName()})
+		out.Roles = append(out.Roles, roleView{Name: role.GetName(), System: role.GetSystem()})
 	}
 	a.writeJSON(w, http.StatusOK, out)
 }
@@ -180,6 +211,164 @@ func (a *servicesAPI) iamRevokeRole(w http.ResponseWriter, r *http.Request) {
 	a.writeSubjectRoles(w, r, subject)
 }
 
+// iamCreateRole — POST /iam/roles: создать пользовательскую роль. Под (manage,
+// iam:global). Дубль имени → 409; пустое имя → 400.
+func (a *servicesAPI) iamCreateRole(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	var body roleNameBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "некорректное тело запроса")
+		return
+	}
+	if body.Name == "" {
+		a.writeError(w, r, http.StatusBadRequest, "имя роли обязательно")
+		return
+	}
+	resp, err := a.iamCatalog.CreateRole(r.Context(), &idmv1.CreateRoleRequest{Name: body.Name})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	role := resp.GetRole()
+	a.writeJSON(w, http.StatusCreated, roleView{Name: role.GetName(), System: role.GetSystem()})
+}
+
+// iamDeleteRole — DELETE /iam/roles/{role}: удалить роль (каскад). Под (manage,
+// iam:global). Системная → 422; несуществующая → 404.
+func (a *servicesAPI) iamDeleteRole(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	role := chi.URLParam(r, "role")
+	if _, err := a.iamCatalog.DeleteRole(r.Context(), &idmv1.DeleteRoleRequest{Name: role}); err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, roleView{Name: role})
+}
+
+// iamAttachPermission — POST /iam/roles/{role}/permissions: прикрепить право к роли
+// (идемпотентно). Под (manage, iam:global). Тело {action,resource}. Роль/право нет
+// → 404; системная роль → 422; пустые поля → 400. Ответ — актуальный набор прав роли.
+func (a *servicesAPI) iamAttachPermission(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	role := chi.URLParam(r, "role")
+	body, ok := a.decodePermissionBody(w, r)
+	if !ok {
+		return
+	}
+	resp, err := a.iamCatalog.AttachPermission(r.Context(), &idmv1.AttachPermissionRequest{
+		Role: role, Action: body.Action, Resource: body.Resource,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	a.writeRolePermissions(w, resp.GetRolePermissions())
+}
+
+// iamDetachPermission — DELETE /iam/roles/{role}/permissions?action=&resource=:
+// открепить право от роли (идемпотентно). Под (manage, iam:global). Пара —
+// в query-параметрах. Системная роль → 422; роль нет → 404; пустые поля → 400.
+func (a *servicesAPI) iamDetachPermission(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	role := chi.URLParam(r, "role")
+	action := r.URL.Query().Get("action")
+	resource := r.URL.Query().Get("resource")
+	if action == "" || resource == "" {
+		a.writeError(w, r, http.StatusBadRequest, "action и resource обязательны")
+		return
+	}
+	resp, err := a.iamCatalog.DetachPermission(r.Context(), &idmv1.DetachPermissionRequest{
+		Role: role, Action: action, Resource: resource,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	a.writeRolePermissions(w, resp.GetRolePermissions())
+}
+
+// iamCreatePermission — POST /iam/permissions: создать пользовательское право. Под
+// (manage, iam:global). Тело {action,resource}. Дубль пары → 409; пустые поля → 400.
+func (a *servicesAPI) iamCreatePermission(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	body, ok := a.decodePermissionBody(w, r)
+	if !ok {
+		return
+	}
+	resp, err := a.iamCatalog.CreatePermission(r.Context(), &idmv1.CreatePermissionRequest{
+		Action: body.Action, Resource: body.Resource,
+	})
+	if err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	a.writeJSON(w, http.StatusCreated, permissionViewFromProto(resp.GetPermission()))
+}
+
+// iamDeletePermission — DELETE /iam/permissions?action=&resource=: удалить право
+// (каскад). Под (manage, iam:global). Системное → 422; несуществующее → 404;
+// пустые поля → 400.
+func (a *servicesAPI) iamDeletePermission(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeResource(w, r, iamResource, "manage") {
+		return
+	}
+	action := r.URL.Query().Get("action")
+	resource := r.URL.Query().Get("resource")
+	if action == "" || resource == "" {
+		a.writeError(w, r, http.StatusBadRequest, "action и resource обязательны")
+		return
+	}
+	if _, err := a.iamCatalog.DeletePermission(r.Context(), &idmv1.DeletePermissionRequest{
+		Action: action, Resource: resource,
+	}); err != nil {
+		a.writeGRPCError(w, r, err)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, permissionView{Action: action, Resource: resource})
+}
+
+// decodePermissionBody разбирает и валидирует тело {action,resource}. При ошибке
+// сам пишет 400 и возвращает ok=false.
+func (a *servicesAPI) decodePermissionBody(w http.ResponseWriter, r *http.Request) (permissionBody, bool) {
+	var body permissionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.writeError(w, r, http.StatusBadRequest, "некорректное тело запроса")
+		return body, false
+	}
+	if body.Action == "" || body.Resource == "" {
+		a.writeError(w, r, http.StatusBadRequest, "action и resource обязательны")
+		return body, false
+	}
+	return body, true
+}
+
+// writeRolePermissions отдаёт клиенту актуальный набор прав роли (ответ attach/detach).
+func (a *servicesAPI) writeRolePermissions(w http.ResponseWriter, rp *idmv1.RolePermissions) {
+	out := rolePermissionsView{
+		Role:        rp.GetRole(),
+		Permissions: make([]permissionView, 0, len(rp.GetPermissions())),
+	}
+	for _, p := range rp.GetPermissions() {
+		out.Permissions = append(out.Permissions, permissionViewFromProto(p))
+	}
+	a.writeJSON(w, http.StatusOK, out)
+}
+
+// permissionViewFromProto маппит одно proto-право в клиентское представление.
+func permissionViewFromProto(p *idmv1.Permission) permissionView {
+	return permissionView{Action: p.GetAction(), Resource: p.GetResource(), System: p.GetSystem()}
+}
+
 // writeSubjectRoles читает актуальный набор ролей субъекта и отдаёт его клиенту
 // (общий ответ чтения ролей и мутаций assign/revoke). Используется после мутации,
 // чтобы клиент получил свежее состояние для рантайм-валидации и обновления UI.
@@ -199,10 +388,7 @@ func (a *servicesAPI) writeSubjectRoles(w http.ResponseWriter, r *http.Request, 
 func permissionListFromProto(in []*idmv1.Permission) permissionListView {
 	out := permissionListView{Permissions: make([]permissionView, 0, len(in))}
 	for _, p := range in {
-		out.Permissions = append(out.Permissions, permissionView{
-			Action:   p.GetAction(),
-			Resource: p.GetResource(),
-		})
+		out.Permissions = append(out.Permissions, permissionViewFromProto(p))
 	}
 	return out
 }

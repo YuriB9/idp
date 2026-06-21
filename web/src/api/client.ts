@@ -43,13 +43,23 @@ const SetServiceOwnersResult = z
 const TransferServiceRequest = z
   .object({ target_project: z.string().min(1) })
   .passthrough();
-const Role = z.object({ name: z.string() }).passthrough();
+const Role = z.object({ name: z.string(), system: z.boolean() }).passthrough();
 const RoleList = z.object({ roles: z.array(Role) }).passthrough();
+const CreateRoleRequest = z.object({ name: z.string().min(1) }).passthrough();
 const Permission = z
-  .object({ action: z.string(), resource: z.string() })
+  .object({ action: z.string(), resource: z.string(), system: z.boolean() })
   .passthrough();
 const PermissionList = z
   .object({ permissions: z.array(Permission) })
+  .passthrough();
+const CreatePermissionRequest = z
+  .object({ action: z.string().min(1), resource: z.string().min(1) })
+  .passthrough();
+const AttachPermissionRequest = z
+  .object({ action: z.string().min(1), resource: z.string().min(1) })
+  .passthrough();
+const RolePermissions = z
+  .object({ role: z.string(), permissions: z.array(Permission) })
   .passthrough();
 const SubjectRoles = z
   .object({ subject: z.string(), roles: z.array(z.string()) })
@@ -71,8 +81,12 @@ export const schemas = {
   TransferServiceRequest,
   Role,
   RoleList,
+  CreateRoleRequest,
   Permission,
   PermissionList,
+  CreatePermissionRequest,
+  AttachPermissionRequest,
+  RolePermissions,
   SubjectRoles,
   SubjectList,
 };
@@ -95,6 +109,83 @@ const endpoints = makeApi([
     ],
   },
   {
+    method: "post",
+    path: "/iam/permissions",
+    alias: "createPermission",
+    description: `Создаёт пользовательское право (system&#x3D;false) с произвольной парой (action, resource); матчинг строгий. Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Дубль пары (action, resource) → 409; пустые поля → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: CreatePermissionRequest,
+      },
+    ],
+    response: Permission,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 409,
+        description: `Конфликт состояния (например, имя сервиса уже занято)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/iam/permissions",
+    alias: "deletePermission",
+    description: `Удаляет право по паре (action, resource), переданной в query-параметрах (каскадно убирает связки права с ролями). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Системное право защищено от удаления → 422; несуществующее право → 404; пустые поля → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "action",
+        type: "Query",
+        schema: z.string().min(1),
+      },
+      {
+        name: "resource",
+        type: "Query",
+        schema: z.string().min(1),
+      },
+    ],
+    response: Permission,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/iam/roles",
     alias: "listRoles",
@@ -106,6 +197,73 @@ const endpoints = makeApi([
       {
         status: 403,
         description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/iam/roles",
+    alias: "createRole",
+    description: `Создаёт пользовательскую роль (system&#x3D;false). Привилегированная структурная мутация каталога: требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Повторное создание роли с тем же именем → 409 (не идемпотентно); пустое имя → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ name: z.string().min(1) }).passthrough(),
+      },
+    ],
+    response: Role,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 409,
+        description: `Конфликт состояния (например, имя сервиса уже занято)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/iam/roles/:role",
+    alias: "deleteRole",
+    description: `Удаляет роль (каскадно снимает её у всех носителей и убирает связки прав). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Системная (сидированная) роль защищена от удаления → 422; несуществующая роль → 404. После мутации IDM широко инвалидирует кэш решений, т.к. затронуты все носители роли (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: Role,
+    errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],
@@ -134,6 +292,99 @@ const endpoints = makeApi([
       {
         status: 404,
         description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/iam/roles/:role/permissions",
+    alias: "attachPermission",
+    description: `Прикрепляет существующее право к роли (идемпотентно: повтор уже привязанного → 200). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль или право → 404; системная роль (её состав прав фиксирован) → 422; пустые поля → 400. Ответ — актуальный набор прав роли. После мутации IDM широко инвалидирует кэш решений, т.к. затронуты все носители роли (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: AttachPermissionRequest,
+      },
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: RolePermissions,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/iam/roles/:role/permissions",
+    alias: "detachPermission",
+    description: `Открепляет право от роли по паре (action, resource) в query-параметрах (идемпотентно: открепление непривязанного → 200). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль → 404; системная роль → 422; пустые поля → 400. Ответ — актуальный набор прав роли. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "role",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+      {
+        name: "action",
+        type: "Query",
+        schema: z.string().min(1),
+      },
+      {
+        name: "resource",
+        type: "Query",
+        schema: z.string().min(1),
+      },
+    ],
+    response: RolePermissions,
+    errors: [
+      {
+        status: 400,
+        description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 404,
+        description: `Ресурс не найден`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 422,
+        description: `Предусловие операции не выполнено (например, нагрузка не снята из K8s или недопустимый исходный статус сервиса).
+`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],

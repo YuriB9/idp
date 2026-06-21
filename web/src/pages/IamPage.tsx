@@ -1,8 +1,11 @@
-// Раздел «Роли и доступы» (IAM-админка, ADR-0014). Горизонтальный маршрут (не
-// project-scoped): просмотр ролей и их прав (read-only), список субъектов с их
-// ролями и форма назначить/снять роль субъекту. Все данные идут через периметр с
-// рантайм-валидацией ответов zod; отказ доступа (403) скрывает содержимое
-// (fail-closed на UI), внутренние ошибки клиенту не раскрываются.
+// Раздел «Роли и доступы» (IAM-админка, ADR-0014/0015). Горизонтальный маршрут (не
+// project-scoped): просмотр ролей и их прав, управление назначением ролей субъектам
+// (write) и СТРУКТУРНОЕ управление каталогом (manage) — создание/удаление ролей и
+// прав, правка набора прав роли (attach/detach). Системные (сидированные) роли/права
+// помечены бейджем «системная» и доступны только для чтения (кнопки удаления/правки
+// скрыты). Все данные идут через периметр с рантайм-валидацией ответов zod; отказ
+// доступа (403) скрывает содержимое (fail-closed на UI), внутренние ошибки клиенту
+// не раскрываются.
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -12,7 +15,16 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { AlertTriangle, KeyRound, Loader2, ShieldX, Trash2, UserCog } from "lucide-react";
+import {
+  AlertTriangle,
+  KeyRound,
+  Loader2,
+  Lock,
+  Plus,
+  ShieldX,
+  Trash2,
+  UserCog,
+} from "lucide-react";
 import { z } from "zod";
 
 import { apiClient } from "@/api";
@@ -35,16 +47,35 @@ const assignFormSchema = z.object({
 });
 type AssignFormValues = z.infer<typeof assignFormSchema>;
 
+// createRoleSchema — валидация ввода формы создания роли.
+const createRoleSchema = z.object({ name: z.string().min(1, "Укажите имя роли") });
+type CreateRoleValues = z.infer<typeof createRoleSchema>;
+
+// createPermissionSchema — валидация ввода формы создания права.
+const createPermissionSchema = z.object({
+  action: z.string().min(1, "Укажите действие"),
+  resource: z.string().min(1, "Укажите ресурс"),
+});
+type CreatePermissionValues = z.infer<typeof createPermissionSchema>;
+
 export function IamPage() {
   const queryClient = useQueryClient();
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [attachPerm, setAttachPerm] = useState<string>("");
 
   // Каталог ролей. Ошибка 403 здесь означает отсутствие права на админку —
   // содержимое раздела не показываем (fail-closed на UI).
   const rolesQuery = useQuery({
     queryKey: ["iam", "roles"],
     queryFn: () => apiClient.listRoles(),
+    retry: false,
+  });
+
+  // Каталог прав — нужен для выбора права при прикреплении к роли и для управления.
+  const permissionsQuery = useQuery({
+    queryKey: ["iam", "permissions"],
+    queryFn: () => apiClient.listPermissions(),
     retry: false,
   });
 
@@ -74,9 +105,24 @@ export function IamPage() {
     defaultValues: { subject: "", role: "" },
   });
 
-  // Инвалидация списков после мутации, чтобы UI отразил актуальные роли.
+  const createRoleForm = useForm<CreateRoleValues>({
+    resolver: zodResolver(createRoleSchema),
+    defaultValues: { name: "" },
+  });
+
+  const createPermForm = useForm<CreatePermissionValues>({
+    resolver: zodResolver(createPermissionSchema),
+    defaultValues: { action: "", resource: "" },
+  });
+
+  // Инвалидация списков после мутации, чтобы UI отразил актуальное состояние.
   const invalidateSubjects = () =>
     queryClient.invalidateQueries({ queryKey: ["iam", "subjects"] });
+  const invalidateRoles = () => queryClient.invalidateQueries({ queryKey: ["iam", "roles"] });
+  const invalidatePermissions = () =>
+    queryClient.invalidateQueries({ queryKey: ["iam", "permissions"] });
+  const invalidateRolePerms = () =>
+    queryClient.invalidateQueries({ queryKey: ["iam", "role-permissions"] });
 
   const assignMutation = useMutation({
     mutationFn: (values: AssignFormValues) =>
@@ -99,6 +145,76 @@ export function IamPage() {
     onError: (err) => setActionError(mutationMessage(err, "снять")),
   });
 
+  const createRoleMutation = useMutation({
+    mutationFn: (values: CreateRoleValues) => apiClient.createRole({ name: values.name }),
+    onSuccess: () => {
+      setActionError(null);
+      createRoleForm.reset();
+      void invalidateRoles();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "создать роль")),
+  });
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: (role: string) => apiClient.deleteRole(undefined, { params: { role } }),
+    onSuccess: (_data, role) => {
+      setActionError(null);
+      if (selectedRole === role) setSelectedRole(null);
+      void invalidateRoles();
+      void invalidateSubjects();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "удалить роль")),
+  });
+
+  const createPermMutation = useMutation({
+    mutationFn: (values: CreatePermissionValues) =>
+      apiClient.createPermission({ action: values.action, resource: values.resource }),
+    onSuccess: () => {
+      setActionError(null);
+      createPermForm.reset();
+      void invalidatePermissions();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "создать право")),
+  });
+
+  const deletePermMutation = useMutation({
+    mutationFn: (vars: { action: string; resource: string }) =>
+      apiClient.deletePermission(undefined, { queries: vars }),
+    onSuccess: () => {
+      setActionError(null);
+      void invalidatePermissions();
+      void invalidateRolePerms();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "удалить право")),
+  });
+
+  const attachMutation = useMutation({
+    mutationFn: (vars: { role: string; action: string; resource: string }) =>
+      apiClient.attachPermission(
+        { action: vars.action, resource: vars.resource },
+        { params: { role: vars.role } },
+      ),
+    onSuccess: () => {
+      setActionError(null);
+      setAttachPerm("");
+      void invalidateRolePerms();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "прикрепить право")),
+  });
+
+  const detachMutation = useMutation({
+    mutationFn: (vars: { role: string; action: string; resource: string }) =>
+      apiClient.detachPermission(undefined, {
+        params: { role: vars.role },
+        queries: { action: vars.action, resource: vars.resource },
+      }),
+    onSuccess: () => {
+      setActionError(null);
+      void invalidateRolePerms();
+    },
+    onError: (err) => setActionError(catalogMessage(err, "открепить право")),
+  });
+
   // 403 на загрузке каталога — нет права на админку: показываем отказ, без содержимого.
   if (httpStatusOf(rolesQuery.error) === 403) {
     return (
@@ -113,14 +229,18 @@ export function IamPage() {
   }
 
   const roles = rolesQuery.data?.roles ?? [];
+  const permissions = permissionsQuery.data?.permissions ?? [];
   const subjects = subjectsQuery.data?.pages.flatMap((p) => p.subjects) ?? [];
+  const selectedRoleObj = roles.find((r) => r.name === selectedRole) ?? null;
+  const selectedRoleIsSystem = selectedRoleObj?.system ?? false;
 
   return (
     <section className="flex flex-col gap-5">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">Роли и доступы</h1>
         <p className="text-sm text-muted-foreground">
-          Просмотр ролей и прав, управление назначением ролей субъектам (IAM-админка)
+          Просмотр и управление каталогом ролей/прав и назначением ролей субъектам
+          (IAM-админка)
         </p>
       </div>
 
@@ -131,15 +251,15 @@ export function IamPage() {
         </p>
       )}
 
-      {/* Роли и их права (read-only) */}
+      {/* Роли и их права */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <KeyRound className="size-4" /> Роли
           </CardTitle>
           <CardDescription>
-            Роли сидируются миграциями; здесь они только отображаются. Выберите
-            роль, чтобы увидеть её права.
+            Выберите роль, чтобы увидеть и изменить её права. Системные роли
+            защищены от удаления и правки.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -149,25 +269,82 @@ export function IamPage() {
           )}
           <div className="flex flex-wrap gap-2">
             {roles.map((r) => (
-              <button
+              <span
                 key={r.name}
-                type="button"
-                onClick={() => setSelectedRole(r.name)}
                 className={
-                  "rounded-md border px-3 py-1.5 text-sm transition-colors " +
+                  "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm transition-colors " +
                   (selectedRole === r.name
                     ? "border-primary bg-accent text-accent-foreground"
-                    : "border-border hover:bg-accent/50")
+                    : "border-border")
                 }
               >
-                {r.name}
-              </button>
+                <button type="button" onClick={() => setSelectedRole(r.name)}>
+                  {r.name}
+                </button>
+                {r.system ? (
+                  <span
+                    className="flex items-center gap-0.5 text-xs text-muted-foreground"
+                    title="Системная роль — защищена от удаления"
+                  >
+                    <Lock className="size-3" />
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`Удалить роль ${r.name}`}
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                    disabled={deleteRoleMutation.isPending}
+                    onClick={() => {
+                      setActionError(null);
+                      deleteRoleMutation.mutate(r.name);
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </span>
             ))}
           </div>
 
+          {/* Форма создания роли */}
+          <form
+            className="flex items-end gap-2"
+            onSubmit={createRoleForm.handleSubmit((values) => {
+              setActionError(null);
+              createRoleMutation.mutate(values);
+            })}
+          >
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="new-role" className="text-sm font-medium">
+                Новая роль
+              </label>
+              <Input
+                id="new-role"
+                placeholder="например, reviewers"
+                aria-invalid={Boolean(createRoleForm.formState.errors.name)}
+                {...createRoleForm.register("name")}
+              />
+            </div>
+            <Button type="submit" variant="outline" disabled={createRoleMutation.isPending}>
+              <Plus className="size-4" /> Создать
+            </Button>
+          </form>
+          {createRoleForm.formState.errors.name && (
+            <p className="text-sm text-destructive">
+              {createRoleForm.formState.errors.name.message}
+            </p>
+          )}
+
           {selectedRole !== null && (
             <div className="rounded-md border border-border p-3">
-              <p className="mb-2 text-sm font-medium">Права роли «{selectedRole}»</p>
+              <p className="mb-2 flex items-center gap-2 text-sm font-medium">
+                Права роли «{selectedRole}»
+                {selectedRoleIsSystem && (
+                  <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                    <Lock className="size-3" /> системная
+                  </span>
+                )}
+              </p>
               {rolePermsQuery.isLoading && (
                 <p className="text-sm text-muted-foreground">Загрузка прав…</p>
               )}
@@ -184,13 +361,176 @@ export function IamPage() {
               {rolePermsQuery.data && rolePermsQuery.data.permissions.length > 0 && (
                 <ul className="flex flex-col gap-1 text-sm">
                   {rolePermsQuery.data.permissions.map((p) => (
-                    <li key={`${p.action}:${p.resource}`} className="font-mono text-xs">
-                      {p.action} @ {p.resource}
+                    <li
+                      key={`${p.action}:${p.resource}`}
+                      className="flex items-center gap-2 font-mono text-xs"
+                    >
+                      <span>
+                        {p.action} @ {p.resource}
+                      </span>
+                      {!selectedRoleIsSystem && (
+                        <button
+                          type="button"
+                          aria-label={`Открепить право ${p.action} ${p.resource}`}
+                          className="text-muted-foreground transition-colors hover:text-destructive"
+                          disabled={detachMutation.isPending}
+                          onClick={() => {
+                            setActionError(null);
+                            detachMutation.mutate({
+                              role: selectedRole,
+                              action: p.action,
+                              resource: p.resource,
+                            });
+                          }}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
+
+              {/* Прикрепление права к пользовательской роли */}
+              {!selectedRoleIsSystem && (
+                <div className="mt-3 flex items-end gap-2">
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="attach-perm" className="text-sm font-medium">
+                      Прикрепить право
+                    </label>
+                    <select
+                      id="attach-perm"
+                      className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      value={attachPerm}
+                      onChange={(e) => setAttachPerm(e.target.value)}
+                    >
+                      <option value="">— выберите право —</option>
+                      {permissions.map((p) => (
+                        <option
+                          key={`${p.action}:${p.resource}`}
+                          value={`${p.action} ${p.resource}`}
+                        >
+                          {p.action} @ {p.resource}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={attachMutation.isPending || attachPerm === ""}
+                    onClick={() => {
+                      const [action, resource] = attachPerm.split(" ");
+                      if (!action || !resource) return;
+                      setActionError(null);
+                      attachMutation.mutate({ role: selectedRole, action, resource });
+                    }}
+                  >
+                    <Plus className="size-4" /> Прикрепить
+                  </Button>
+                </div>
+              )}
+              {selectedRoleIsSystem && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Состав прав системной роли фиксирован и не редактируется.
+                </p>
+              )}
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Каталог прав */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="size-4" /> Права
+          </CardTitle>
+          <CardDescription>
+            Каталог прав (пара действие/ресурс). Системные права защищены от
+            удаления.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {permissionsQuery.isLoading && (
+            <p className="text-sm text-muted-foreground">Загрузка…</p>
+          )}
+          {permissionsQuery.isError && (
+            <p className="text-sm text-destructive">Не удалось загрузить права.</p>
+          )}
+          <ul className="flex flex-col gap-1 text-sm">
+            {permissions.map((p) => (
+              <li
+                key={`${p.action}:${p.resource}`}
+                className="flex items-center gap-2 font-mono text-xs"
+              >
+                <span>
+                  {p.action} @ {p.resource}
+                </span>
+                {p.system ? (
+                  <span
+                    className="flex items-center gap-0.5 text-muted-foreground"
+                    title="Системное право — защищено от удаления"
+                  >
+                    <Lock className="size-3" />
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`Удалить право ${p.action} ${p.resource}`}
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                    disabled={deletePermMutation.isPending}
+                    onClick={() => {
+                      setActionError(null);
+                      deletePermMutation.mutate({ action: p.action, resource: p.resource });
+                    }}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {/* Форма создания права */}
+          <form
+            className="flex items-end gap-2"
+            onSubmit={createPermForm.handleSubmit((values) => {
+              setActionError(null);
+              createPermMutation.mutate(values);
+            })}
+          >
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="new-action" className="text-sm font-medium">
+                Действие
+              </label>
+              <Input
+                id="new-action"
+                placeholder="например, deploy"
+                aria-invalid={Boolean(createPermForm.formState.errors.action)}
+                {...createPermForm.register("action")}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="new-resource" className="text-sm font-medium">
+                Ресурс
+              </label>
+              <Input
+                id="new-resource"
+                placeholder="например, project:demo"
+                aria-invalid={Boolean(createPermForm.formState.errors.resource)}
+                {...createPermForm.register("resource")}
+              />
+            </div>
+            <Button type="submit" variant="outline" disabled={createPermMutation.isPending}>
+              <Plus className="size-4" /> Создать
+            </Button>
+          </form>
+          {(createPermForm.formState.errors.action || createPermForm.formState.errors.resource) && (
+            <p className="text-sm text-destructive">
+              {createPermForm.formState.errors.action?.message ??
+                createPermForm.formState.errors.resource?.message}
+            </p>
           )}
         </CardContent>
       </Card>
@@ -321,8 +661,8 @@ export function IamPage() {
   );
 }
 
-// mutationMessage переводит ошибку мутации в стабильное пользовательское сообщение
-// (без раскрытия внутренних деталей сервера).
+// mutationMessage переводит ошибку мутации назначения/снятия роли в стабильное
+// пользовательское сообщение (без раскрытия внутренних деталей сервера).
 function mutationMessage(err: unknown, verb: string): string {
   switch (httpStatusOf(err)) {
     case 403:
@@ -333,5 +673,24 @@ function mutationMessage(err: unknown, verb: string): string {
       return "Некорректные данные запроса.";
     default:
       return `Не удалось ${verb} роль. Повторите попытку.`;
+  }
+}
+
+// catalogMessage переводит ошибку структурной мутации каталога (manage) в стабильное
+// пользовательское сообщение, разводя 403/404/409/422.
+function catalogMessage(err: unknown, verb: string): string {
+  switch (httpStatusOf(err)) {
+    case 403:
+      return "Недостаточно прав для изменения каталога (нужно право manage на iam:global).";
+    case 404:
+      return "Роль или право не найдены.";
+    case 409:
+      return "Такая роль или право уже существуют.";
+    case 422:
+      return "Системные роли и права защищены от изменения.";
+    case 400:
+      return "Некорректные данные запроса.";
+    default:
+      return `Не удалось ${verb}. Повторите попытку.`;
   }
 }

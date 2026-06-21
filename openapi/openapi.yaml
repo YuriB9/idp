@@ -235,6 +235,59 @@ paths:
                 $ref: "#/components/schemas/RoleList"
         "403":
           $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createRole
+      summary: Создать роль каталога RBAC
+      description: >
+        Создаёт пользовательскую роль (system=false). Привилегированная
+        структурная мутация каталога: требует право (manage, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed). Повторное создание роли с тем
+        же именем → 409 (не идемпотентно); пустое имя → 400. После мутации IDM
+        широко инвалидирует кэш решений (ADR-0015).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoleRequest"
+      responses:
+        "201":
+          description: Роль создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /iam/roles/{role}:
+    delete:
+      operationId: deleteRole
+      summary: Удалить роль каталога RBAC
+      description: >
+        Удаляет роль (каскадно снимает её у всех носителей и убирает связки прав).
+        Требует право (manage, iam:global); отказ/недоступность IDM → 403
+        (fail-closed). Системная (сидированная) роль защищена от удаления → 422;
+        несуществующая роль → 404. После мутации IDM широко инвалидирует кэш
+        решений, т.к. затронуты все носители роли (ADR-0015).
+      parameters:
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Роль удалена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
   /iam/permissions:
     get:
       operationId: listPermissions
@@ -251,6 +304,61 @@ paths:
                 $ref: "#/components/schemas/PermissionList"
         "403":
           $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createPermission
+      summary: Создать право каталога RBAC
+      description: >
+        Создаёт пользовательское право (system=false) с произвольной парой
+        (action, resource); матчинг строгий. Требует право (manage, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed). Дубль пары (action, resource)
+        → 409; пустые поля → 400. После мутации IDM широко инвалидирует кэш
+        решений (ADR-0015).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePermissionRequest"
+      responses:
+        "201":
+          description: Право создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Permission"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deletePermission
+      summary: Удалить право каталога RBAC
+      description: >
+        Удаляет право по паре (action, resource), переданной в query-параметрах
+        (каскадно убирает связки права с ролями). Требует право (manage,
+        iam:global); отказ/недоступность IDM → 403 (fail-closed). Системное право
+        защищено от удаления → 422; несуществующее право → 404; пустые поля → 400.
+        После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+      parameters:
+        - $ref: "#/components/parameters/ActionQuery"
+        - $ref: "#/components/parameters/ResourceQuery"
+      responses:
+        "200":
+          description: Право удалено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Permission"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
   /iam/roles/{role}/permissions:
     get:
       operationId: getRolePermissions
@@ -271,6 +379,67 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+    post:
+      operationId: attachPermission
+      summary: Прикрепить право к роли
+      description: >
+        Прикрепляет существующее право к роли (идемпотентно: повтор уже
+        привязанного → 200). Требует право (manage, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль или право
+        → 404; системная роль (её состав прав фиксирован) → 422; пустые поля → 400.
+        Ответ — актуальный набор прав роли. После мутации IDM широко инвалидирует
+        кэш решений, т.к. затронуты все носители роли (ADR-0015).
+      parameters:
+        - $ref: "#/components/parameters/RolePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachPermissionRequest"
+      responses:
+        "200":
+          description: Право прикреплено (или уже было прикреплено)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RolePermissions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
+    delete:
+      operationId: detachPermission
+      summary: Открепить право от роли
+      description: >
+        Открепляет право от роли по паре (action, resource) в query-параметрах
+        (идемпотентно: открепление непривязанного → 200). Требует право (manage,
+        iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая
+        роль → 404; системная роль → 422; пустые поля → 400. Ответ — актуальный
+        набор прав роли. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+      parameters:
+        - $ref: "#/components/parameters/RolePath"
+        - $ref: "#/components/parameters/ActionQuery"
+        - $ref: "#/components/parameters/ResourceQuery"
+      responses:
+        "200":
+          description: Право откреплено (или его и не было)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RolePermissions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
   /iam/subjects:
     get:
       operationId: listSubjects
@@ -415,6 +584,22 @@ components:
         выборки.
       schema:
         type: string
+    ActionQuery:
+      name: action
+      in: query
+      required: true
+      description: Действие права (часть идентификатора пары action/resource).
+      schema:
+        type: string
+        minLength: 1
+    ResourceQuery:
+      name: resource
+      in: query
+      required: true
+      description: Ресурс права (часть идентификатора пары action/resource).
+      schema:
+        type: string
+        minLength: 1
   responses:
     BadRequest:
       description: Некорректный запрос (валидация входных данных)
@@ -557,23 +742,78 @@ components:
             быть свободна, иначе 409.
     Role:
       type: object
-      required: [name]
+      required: [name, system]
       properties:
         name:
           type: string
           description: >
             Имя роли — её стабильный идентификатор (им оперируют assign/revoke);
             внутренний id наружу не отдаётся (ADR-0014).
+        system:
+          type: boolean
+          description: >
+            Признак системной (сидированной) роли: защищена от удаления и правки
+            набора прав через API. UI скрывает для таких роль удаление/правку
+            (ADR-0015).
     Permission:
+      type: object
+      required: [action, resource, system]
+      properties:
+        action:
+          type: string
+          description: Действие (например, read, write, create, manage).
+        resource:
+          type: string
+          description: Целевой ресурс (например, iam:global, project:demo).
+        system:
+          type: boolean
+          description: >
+            Признак системного (сидированного) права: защищено от удаления через
+            API (ADR-0015).
+    RolePermissions:
+      type: object
+      required: [role, permissions]
+      properties:
+        role:
+          type: string
+          description: Имя роли.
+        permissions:
+          type: array
+          description: Актуальный набор прав роли после операции.
+          items:
+            $ref: "#/components/schemas/Permission"
+    CreateRoleRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Имя создаваемой роли (непустое, уникальное).
+    CreatePermissionRequest:
       type: object
       required: [action, resource]
       properties:
         action:
           type: string
-          description: Действие (например, read, write, create).
+          minLength: 1
+          description: Действие создаваемого права.
         resource:
           type: string
-          description: Целевой ресурс (например, iam:global, project:demo).
+          minLength: 1
+          description: Ресурс создаваемого права.
+    AttachPermissionRequest:
+      type: object
+      required: [action, resource]
+      properties:
+        action:
+          type: string
+          minLength: 1
+          description: Действие прикрепляемого права.
+        resource:
+          type: string
+          minLength: 1
+          description: Ресурс прикрепляемого права.
     RoleList:
       type: object
       required: [roles]
