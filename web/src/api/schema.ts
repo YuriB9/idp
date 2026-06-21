@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Liveness-проба периметра */
+        /**
+         * Liveness-проба периметра
+         * @description Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от доступности нижележащих сервисов (это readiness, не liveness).
+         */
         get: operations["getHealth"];
         put?: never;
         post?: never;
@@ -28,10 +31,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Список сервисов проекта с keyset-пагинацией */
+        /**
+         * Список сервисов проекта с keyset-пагинацией
+         * @description Возвращает страницу сервисов проекта с keyset-пагинацией (page_size/page_token). Требует право list на project:{project}; отказ RBAC → 403. Курсор непрозрачен и пробрасывается без интерпретации.
+         */
         get: operations["listServices"];
         put?: never;
-        /** Запуск создания сервиса в проекте */
+        /**
+         * Запуск создания сервиса в проекте
+         * @description Запускает создание сервиса в проекте (асинхронная провизия репозитория, образов и секретов). Запись каталога фиксируется со статусом creating; требует право create на project:{project} (отказ RBAC → 403). Занятое имя в проекте → 409.
+         */
         post: operations["createService"];
         delete?: never;
         options?: never;
@@ -46,7 +55,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Чтение статуса одного сервиса проекта */
+        /**
+         * Чтение статуса одного сервиса проекта
+         * @description Возвращает текущее состояние сервиса (статус, владельцы, версия). Требует право read на project:{project} (отказ RBAC → 403); отсутствие сервиса → 404.
+         */
         get: operations["getService"];
         put?: never;
         post?: never;

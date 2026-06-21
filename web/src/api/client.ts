@@ -84,6 +84,8 @@ const endpoints = makeApi([
     method: "get",
     path: "/healthz",
     alias: "getHealth",
+    description: `Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от доступности нижележащих сервисов (это readiness, не liveness).
+`,
     requestFormat: "json",
     response: HealthStatus,
   },
@@ -278,6 +280,8 @@ const endpoints = makeApi([
     method: "get",
     path: "/projects/:project/services",
     alias: "listServices",
+    description: `Возвращает страницу сервисов проекта с keyset-пагинацией (page_size/page_token). Требует право list на project:{project}; отказ RBAC → 403. Курсор непрозрачен и пробрасывается без интерпретации.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -309,6 +313,8 @@ const endpoints = makeApi([
     method: "post",
     path: "/projects/:project/services",
     alias: "createService",
+    description: `Запускает создание сервиса в проекте (асинхронная провизия репозитория, образов и секретов). Запись каталога фиксируется со статусом creating; требует право create на project:{project} (отказ RBAC → 403). Занятое имя в проекте → 409.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -340,6 +346,8 @@ const endpoints = makeApi([
     method: "get",
     path: "/projects/:project/services/:name",
     alias: "getService",
+    description: `Возвращает текущее состояние сервиса (статус, владельцы, версия). Требует право read на project:{project} (отказ RBAC → 403); отсутствие сервиса → 404.
+`,
     requestFormat: "json",
     parameters: [
       {

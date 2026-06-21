@@ -13,9 +13,11 @@
     "gen:zod": "openapi-zod-client ../openapi/openapi.yaml -o src/api/client.ts --export-schemas",
     "gen:spec": "node -e \"require('fs').copyFileSync('../openapi/openapi.yaml','public/openapi.yaml')\"",
     "gen": "npm run gen:types && npm run gen:zod && npm run gen:spec",
-    "gen:check": "npm run gen && git diff --exit-code src/api public/openapi.yaml"
+    "gen:check": "npm run gen && git diff --exit-code src/api public/openapi.yaml",
+    "lint:openapi": "spectral lint ../openapi/openapi.yaml --ruleset ../.spectral.yaml --fail-severity=error"
   },
   "devDependencies": {
+    "@stoplight/spectral-cli": "6.16.0",
     "@tailwindcss/vite": "4.3.1",
     "@testing-library/jest-dom": "6.6.3",
     "@testing-library/react": "16.3.2",

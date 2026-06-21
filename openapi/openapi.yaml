@@ -12,6 +12,9 @@ paths:
     get:
       operationId: getHealth
       summary: Liveness-проба периметра
+      description: >
+        Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от
+        доступности нижележащих сервисов (это readiness, не liveness).
       responses:
         "200":
           description: Сервис жив
@@ -23,6 +26,10 @@ paths:
     get:
       operationId: listServices
       summary: Список сервисов проекта с keyset-пагинацией
+      description: >
+        Возвращает страницу сервисов проекта с keyset-пагинацией
+        (page_size/page_token). Требует право list на project:{project}; отказ
+        RBAC → 403. Курсор непрозрачен и пробрасывается без интерпретации.
       parameters:
         - $ref: "#/components/parameters/ProjectPath"
         - name: page_size
@@ -54,6 +61,11 @@ paths:
     post:
       operationId: createService
       summary: Запуск создания сервиса в проекте
+      description: >
+        Запускает создание сервиса в проекте (асинхронная провизия репозитория,
+        образов и секретов). Запись каталога фиксируется со статусом creating;
+        требует право create на project:{project} (отказ RBAC → 403). Занятое имя
+        в проекте → 409.
       parameters:
         - $ref: "#/components/parameters/ProjectPath"
       requestBody:
@@ -77,6 +89,10 @@ paths:
     get:
       operationId: getService
       summary: Чтение статуса одного сервиса проекта
+      description: >
+        Возвращает текущее состояние сервиса (статус, владельцы, версия). Требует
+        право read на project:{project} (отказ RBAC → 403); отсутствие сервиса →
+        404.
       parameters:
         - $ref: "#/components/parameters/ProjectPath"
         - $ref: "#/components/parameters/ServiceNamePath"
