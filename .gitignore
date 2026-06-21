@@ -19,7 +19,6 @@ web/dist/
 .idea/
 .vscode/
 
-# understand-anything
-.understand-anything/*
-!.understand-anything/.understandignore
-!.understand-anything/config.json
+IDP.code-workspace
+
+.playwright-mcp

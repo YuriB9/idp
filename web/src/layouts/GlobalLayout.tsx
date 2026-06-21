@@ -3,6 +3,7 @@
 import { Boxes, FileCode2, Layers, ServerCog, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 
 // DEFAULT_PROJECT — проект по умолчанию для MVP-демо (выбор проекта — позже).
@@ -62,6 +63,10 @@ export function GlobalLayout() {
           <span className="text-sm text-muted-foreground">
             Каталог сервисов команды DevInfra
           </span>
+          {/* Переключатель светлой/тёмной темы — у правого края шапки. */}
+          <div className="ml-auto">
+            <ThemeToggle />
+          </div>
         </header>
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mx-auto max-w-3xl">

@@ -57,11 +57,12 @@ func run() error {
 	// каталога IAM-админки (IamAdmin) и управление ролями (RoleAdmin).
 	// Клиент projects — основа REST-ручек периметра.
 	services := &servicesAPI{
-		client:    projectsv1.NewProjectsServiceClient(projectsConn),
-		idm:       idmv1.NewAccessServiceClient(idmConn),
-		iamAdmin:  idmv1.NewIamAdminServiceClient(idmConn),
-		roleAdmin: idmv1.NewRoleAdminServiceClient(idmConn),
-		log:       log,
+		client:     projectsv1.NewProjectsServiceClient(projectsConn),
+		idm:        idmv1.NewAccessServiceClient(idmConn),
+		iamAdmin:   idmv1.NewIamAdminServiceClient(idmConn),
+		iamCatalog: idmv1.NewIamCatalogServiceClient(idmConn),
+		roleAdmin:  idmv1.NewRoleAdminServiceClient(idmConn),
+		log:        log,
 	}
 
 	router := chi.NewRouter()

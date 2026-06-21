@@ -51,19 +51,60 @@ service IamAdminService {
   rpc GetSubjectRoles(GetSubjectRolesRequest) returns (GetSubjectRolesResponse);
 }
 
+// IamCatalogService — мутирующий контракт каталога IAM (ADR-0015): структурные
+// изменения самого каталога ролей/прав — создание/удаление ролей и прав,
+// правка набора прав роли (attach/detach). Путь привилегированный: gateway
+// проверяет право (manage, iam:global) перед КАЖДОЙ ручкой (fail-closed),
+// отдельно и привилегированнее, чем write (assign/revoke). Любая структурная
+// мутация → ШИРОКАЯ инвалидация кэша решений (поколение idm:cache:gen), т.к.
+// правка role_permissions/удаление роли затрагивает ВСЕХ носителей роли.
+// Системные (сидированные) роли/права защищены от удаления и правки набора прав
+// (FailedPrecondition). Расширение аддитивно (wire-совместимо): новый сервис и
+// сообщения, существующие RPC не меняются. Мутации привязок субъект↔роль
+// выполняет RoleAdminService (переиспользуется, не дублируется).
+service IamCatalogService {
+  // CreateRole создаёт пользовательскую роль (system=false). Дубль имени →
+  // AlreadyExists (не идемпотентно); пустое имя → InvalidArgument.
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+  // DeleteRole удаляет роль (каскад subject_roles/role_permissions). Системная
+  // роль → FailedPrecondition; несуществующая → NotFound.
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  // CreatePermission создаёт пользовательское право (system=false). Дубль пары
+  // (action, resource) → AlreadyExists; пустые поля → InvalidArgument.
+  rpc CreatePermission(CreatePermissionRequest) returns (CreatePermissionResponse);
+  // DeletePermission удаляет право (каскад role_permissions). Системное право →
+  // FailedPrecondition; несуществующее → NotFound.
+  rpc DeletePermission(DeletePermissionRequest) returns (DeletePermissionResponse);
+  // AttachPermission прикрепляет право к роли (идемпотентно: повтор — успех).
+  // Роль/право не найдены → NotFound; системная роль → FailedPrecondition.
+  // Возвращает актуальный набор прав роли.
+  rpc AttachPermission(AttachPermissionRequest) returns (AttachPermissionResponse);
+  // DetachPermission открепляет право от роли (идемпотентно: открепление
+  // непривязанного — успех). Роль не найдена → NotFound; системная роль →
+  // FailedPrecondition. Возвращает актуальный набор прав роли.
+  rpc DetachPermission(DetachPermissionRequest) returns (DetachPermissionResponse);
+}
+
 // Role — роль каталога. Стабильный идентификатор роли — её name (им же оперируют
 // AssignRole/RevokeRole); внутренний id (UUID) наружу не отдаётся.
 message Role {
   // name — человекочитаемое уникальное имя роли.
   string name = 1;
+  // system — признак системной (сидированной) роли: такие роли защищены от
+  // удаления и правки набора прав через API (ADR-0015). Поле аддитивно
+  // (wire-совместимо): старые клиенты, не знающие о нём, видят false.
+  bool system = 2;
 }
 
 // Permission — право: пара (action, resource), сравнение строгое.
 message Permission {
-  // action — действие (например, "read", "write", "create").
+  // action — действие (например, "read", "write", "create", "manage").
   string action = 1;
   // resource — целевой ресурс (например, "iam:global", "project:demo").
   string resource = 2;
+  // system — признак системного (сидированного) права: защищено от удаления
+  // через API (ADR-0015). Поле аддитивно (wire-совместимо).
+  bool system = 3;
 }
 
 // SubjectRoles — субъект и набор имён его ролей.
@@ -155,3 +196,77 @@ message RevokeRoleRequest {
 }
 
 message RevokeRoleResponse {}
+
+// RolePermissions — роль и актуальный набор её прав (ответ attach/detach).
+message RolePermissions {
+  // role — имя роли.
+  string role = 1;
+  // permissions — текущий набор прав роли после операции.
+  repeated Permission permissions = 2;
+}
+
+message CreateRoleRequest {
+  // name — имя создаваемой роли (непустое, уникальное).
+  string name = 1;
+}
+
+message CreateRoleResponse {
+  // role — созданная роль (system=false).
+  Role role = 1;
+}
+
+message DeleteRoleRequest {
+  // name — имя удаляемой роли.
+  string name = 1;
+}
+
+message DeleteRoleResponse {}
+
+message CreatePermissionRequest {
+  // action — действие создаваемого права (непустое).
+  string action = 1;
+  // resource — ресурс создаваемого права (непустой).
+  string resource = 2;
+}
+
+message CreatePermissionResponse {
+  // permission — созданное право (system=false).
+  Permission permission = 1;
+}
+
+message DeletePermissionRequest {
+  // action — действие удаляемого права.
+  string action = 1;
+  // resource — ресурс удаляемого права.
+  string resource = 2;
+}
+
+message DeletePermissionResponse {}
+
+message AttachPermissionRequest {
+  // role — имя роли, к которой прикрепляется право.
+  string role = 1;
+  // action — действие прикрепляемого права.
+  string action = 2;
+  // resource — ресурс прикрепляемого права.
+  string resource = 3;
+}
+
+message AttachPermissionResponse {
+  // role_permissions — актуальный набор прав роли после прикрепления.
+  RolePermissions role_permissions = 1;
+}
+
+message DetachPermissionRequest {
+  // role — имя роли, от которой открепляется право.
+  string role = 1;
+  // action — действие открепляемого права.
+  string action = 2;
+  // resource — ресурс открепляемого права.
+  string resource = 3;
+}
+
+message DetachPermissionResponse {
+  // role_permissions — актуальный набор прав роли после открепления.
+  RolePermissions role_permissions = 1;
+}

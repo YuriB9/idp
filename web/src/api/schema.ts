@@ -121,8 +121,32 @@ export interface paths {
          */
         get: operations["listRoles"];
         put?: never;
-        post?: never;
+        /**
+         * Создать роль каталога RBAC
+         * @description Создаёт пользовательскую роль (system=false). Привилегированная структурная мутация каталога: требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Повторное создание роли с тем же именем → 409 (не идемпотентно); пустое имя → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+         */
+        post: operations["createRole"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/iam/roles/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить роль каталога RBAC
+         * @description Удаляет роль (каскадно снимает её у всех носителей и убирает связки прав). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Системная (сидированная) роль защищена от удаления → 422; несуществующая роль → 404. После мутации IDM широко инвалидирует кэш решений, т.к. затронуты все носители роли (ADR-0015).
+         */
+        delete: operations["deleteRole"];
         options?: never;
         head?: never;
         patch?: never;
@@ -141,8 +165,16 @@ export interface paths {
          */
         get: operations["listPermissions"];
         put?: never;
-        post?: never;
-        delete?: never;
+        /**
+         * Создать право каталога RBAC
+         * @description Создаёт пользовательское право (system=false) с произвольной парой (action, resource); матчинг строгий. Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Дубль пары (action, resource) → 409; пустые поля → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+         */
+        post: operations["createPermission"];
+        /**
+         * Удалить право каталога RBAC
+         * @description Удаляет право по паре (action, resource), переданной в query-параметрах (каскадно убирает связки права с ролями). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Системное право защищено от удаления → 422; несуществующее право → 404; пустые поля → 400. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+         */
+        delete: operations["deletePermission"];
         options?: never;
         head?: never;
         patch?: never;
@@ -161,8 +193,16 @@ export interface paths {
          */
         get: operations["getRolePermissions"];
         put?: never;
-        post?: never;
-        delete?: never;
+        /**
+         * Прикрепить право к роли
+         * @description Прикрепляет существующее право к роли (идемпотентно: повтор уже привязанного → 200). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль или право → 404; системная роль (её состав прав фиксирован) → 422; пустые поля → 400. Ответ — актуальный набор прав роли. После мутации IDM широко инвалидирует кэш решений, т.к. затронуты все носители роли (ADR-0015).
+         */
+        post: operations["attachPermission"];
+        /**
+         * Открепить право от роли
+         * @description Открепляет право от роли по паре (action, resource) в query-параметрах (идемпотентно: открепление непривязанного → 200). Требует право (manage, iam:global); отказ/недоступность IDM → 403 (fail-closed). Несуществующая роль → 404; системная роль → 422; пустые поля → 400. Ответ — актуальный набор прав роли. После мутации IDM широко инвалидирует кэш решений (ADR-0015).
+         */
+        delete: operations["detachPermission"];
         options?: never;
         head?: never;
         patch?: never;
@@ -298,11 +338,37 @@ export interface components {
         Role: {
             /** @description Имя роли — её стабильный идентификатор (им оперируют assign/revoke); внутренний id наружу не отдаётся (ADR-0014). */
             name: string;
+            /** @description Признак системной (сидированной) роли: защищена от удаления и правки набора прав через API. UI скрывает для таких роль удаление/правку (ADR-0015). */
+            system: boolean;
         };
         Permission: {
-            /** @description Действие (например, read, write, create). */
+            /** @description Действие (например, read, write, create, manage). */
             action: string;
             /** @description Целевой ресурс (например, iam:global, project:demo). */
+            resource: string;
+            /** @description Признак системного (сидированного) права: защищено от удаления через API (ADR-0015). */
+            system: boolean;
+        };
+        RolePermissions: {
+            /** @description Имя роли. */
+            role: string;
+            /** @description Актуальный набор прав роли после операции. */
+            permissions: components["schemas"]["Permission"][];
+        };
+        CreateRoleRequest: {
+            /** @description Имя создаваемой роли (непустое, уникальное). */
+            name: string;
+        };
+        CreatePermissionRequest: {
+            /** @description Действие создаваемого права. */
+            action: string;
+            /** @description Ресурс создаваемого права. */
+            resource: string;
+        };
+        AttachPermissionRequest: {
+            /** @description Действие прикрепляемого права. */
+            action: string;
+            /** @description Ресурс прикрепляемого права. */
             resource: string;
         };
         RoleList: {
@@ -387,6 +453,10 @@ export interface components {
         PageSizeQuery: number;
         /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
         PageTokenQuery: string;
+        /** @description Действие права (часть идентификатора пары action/resource). */
+        ActionQuery: string;
+        /** @description Ресурс права (часть идентификатора пары action/resource). */
+        ResourceQuery: string;
     };
     requestBodies: never;
     headers: never;
@@ -603,6 +673,59 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Роль создана */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Role"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Роль удалена */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Role"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["PreconditionFailed"];
+        };
+    };
     listPermissions: {
         parameters: {
             query?: never;
@@ -622,6 +745,62 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+        };
+    };
+    createPermission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePermissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Право создано */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Permission"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deletePermission: {
+        parameters: {
+            query: {
+                /** @description Действие права (часть идентификатора пары action/resource). */
+                action: components["parameters"]["ActionQuery"];
+                /** @description Ресурс права (часть идентификатора пары action/resource). */
+                resource: components["parameters"]["ResourceQuery"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Право удалено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Permission"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["PreconditionFailed"];
         };
     };
     getRolePermissions: {
@@ -647,6 +826,69 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    attachPermission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachPermissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Право прикреплено (или уже было прикреплено) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolePermissions"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["PreconditionFailed"];
+        };
+    };
+    detachPermission: {
+        parameters: {
+            query: {
+                /** @description Действие права (часть идентификатора пары action/resource). */
+                action: components["parameters"]["ActionQuery"];
+                /** @description Ресурс права (часть идентификатора пары action/resource). */
+                resource: components["parameters"]["ResourceQuery"];
+            };
+            header?: never;
+            path: {
+                /** @description Имя роли каталога RBAC. */
+                role: components["parameters"]["RolePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Право откреплено (или его и не было) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RolePermissions"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["PreconditionFailed"];
         };
     };
     listSubjects: {

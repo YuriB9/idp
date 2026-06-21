@@ -26,15 +26,19 @@ const (
 )
 
 // Role — роль каталога (стабильный идентификатор — name; внутренний id наружу
-// не отдаётся).
+// не отдаётся). System — признак системной (сидированной) роли: защищена от
+// удаления и правки набора прав через API (ADR-0015).
 type Role struct {
-	Name string
+	Name   string
+	System bool
 }
 
-// Permission — право: пара (action, resource), сравнение строгое.
+// Permission — право: пара (action, resource), сравнение строгое. System —
+// признак системного (сидированного) права: защищено от удаления через API.
 type Permission struct {
 	Action   string
 	Resource string
+	System   bool
 }
 
 // SubjectRoles — субъект и имена его ролей.
@@ -45,7 +49,7 @@ type SubjectRoles struct {
 
 // ListRoles возвращает все роли каталога, упорядоченные по имени.
 func (r *Repo) ListRoles(ctx context.Context) ([]Role, error) {
-	rows, err := r.pool.Query(ctx, `SELECT name FROM roles ORDER BY name`)
+	rows, err := r.pool.Query(ctx, `SELECT name, system FROM roles ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("repository: список ролей: %w", err)
 	}
@@ -54,7 +58,7 @@ func (r *Repo) ListRoles(ctx context.Context) ([]Role, error) {
 	roles := make([]Role, 0)
 	for rows.Next() {
 		var role Role
-		if serr := rows.Scan(&role.Name); serr != nil {
+		if serr := rows.Scan(&role.Name, &role.System); serr != nil {
 			return nil, fmt.Errorf("repository: чтение роли: %w", serr)
 		}
 		roles = append(roles, role)
@@ -68,7 +72,7 @@ func (r *Repo) ListRoles(ctx context.Context) ([]Role, error) {
 // ListPermissions возвращает все права каталога, упорядоченные по (resource, action).
 func (r *Repo) ListPermissions(ctx context.Context) ([]Permission, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT action, resource FROM permissions ORDER BY resource, action`)
+		`SELECT action, resource, system FROM permissions ORDER BY resource, action`)
 	if err != nil {
 		return nil, fmt.Errorf("repository: список прав: %w", err)
 	}
@@ -89,7 +93,7 @@ func (r *Repo) GetRolePermissions(ctx context.Context, role string) ([]Permissio
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT p.action, p.resource
+		SELECT p.action, p.resource, p.system
 		FROM role_permissions rp
 		JOIN permissions p ON p.id = rp.permission_id
 		WHERE rp.role_id = $1
@@ -102,12 +106,12 @@ func (r *Repo) GetRolePermissions(ctx context.Context, role string) ([]Permissio
 	return scanPermissions(rows)
 }
 
-// scanPermissions вычитывает строки (action, resource) в срез прав.
+// scanPermissions вычитывает строки (action, resource, system) в срез прав.
 func scanPermissions(rows pgx.Rows) ([]Permission, error) {
 	perms := make([]Permission, 0)
 	for rows.Next() {
 		var p Permission
-		if serr := rows.Scan(&p.Action, &p.Resource); serr != nil {
+		if serr := rows.Scan(&p.Action, &p.Resource, &p.System); serr != nil {
 			return nil, fmt.Errorf("repository: чтение права: %w", serr)
 		}
 		perms = append(perms, p)

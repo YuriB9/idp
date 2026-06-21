@@ -577,3 +577,347 @@ var IamAdminService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "idm/v1/idm.proto",
 }
+
+const (
+	IamCatalogService_CreateRole_FullMethodName       = "/idm.v1.IamCatalogService/CreateRole"
+	IamCatalogService_DeleteRole_FullMethodName       = "/idm.v1.IamCatalogService/DeleteRole"
+	IamCatalogService_CreatePermission_FullMethodName = "/idm.v1.IamCatalogService/CreatePermission"
+	IamCatalogService_DeletePermission_FullMethodName = "/idm.v1.IamCatalogService/DeletePermission"
+	IamCatalogService_AttachPermission_FullMethodName = "/idm.v1.IamCatalogService/AttachPermission"
+	IamCatalogService_DetachPermission_FullMethodName = "/idm.v1.IamCatalogService/DetachPermission"
+)
+
+// IamCatalogServiceClient is the client API for IamCatalogService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// IamCatalogService — мутирующий контракт каталога IAM (ADR-0015): структурные
+// изменения самого каталога ролей/прав — создание/удаление ролей и прав,
+// правка набора прав роли (attach/detach). Путь привилегированный: gateway
+// проверяет право (manage, iam:global) перед КАЖДОЙ ручкой (fail-closed),
+// отдельно и привилегированнее, чем write (assign/revoke). Любая структурная
+// мутация → ШИРОКАЯ инвалидация кэша решений (поколение idm:cache:gen), т.к.
+// правка role_permissions/удаление роли затрагивает ВСЕХ носителей роли.
+// Системные (сидированные) роли/права защищены от удаления и правки набора прав
+// (FailedPrecondition). Расширение аддитивно (wire-совместимо): новый сервис и
+// сообщения, существующие RPC не меняются. Мутации привязок субъект↔роль
+// выполняет RoleAdminService (переиспользуется, не дублируется).
+type IamCatalogServiceClient interface {
+	// CreateRole создаёт пользовательскую роль (system=false). Дубль имени →
+	// AlreadyExists (не идемпотентно); пустое имя → InvalidArgument.
+	CreateRole(ctx context.Context, in *CreateRoleRequest, opts ...grpc.CallOption) (*CreateRoleResponse, error)
+	// DeleteRole удаляет роль (каскад subject_roles/role_permissions). Системная
+	// роль → FailedPrecondition; несуществующая → NotFound.
+	DeleteRole(ctx context.Context, in *DeleteRoleRequest, opts ...grpc.CallOption) (*DeleteRoleResponse, error)
+	// CreatePermission создаёт пользовательское право (system=false). Дубль пары
+	// (action, resource) → AlreadyExists; пустые поля → InvalidArgument.
+	CreatePermission(ctx context.Context, in *CreatePermissionRequest, opts ...grpc.CallOption) (*CreatePermissionResponse, error)
+	// DeletePermission удаляет право (каскад role_permissions). Системное право →
+	// FailedPrecondition; несуществующее → NotFound.
+	DeletePermission(ctx context.Context, in *DeletePermissionRequest, opts ...grpc.CallOption) (*DeletePermissionResponse, error)
+	// AttachPermission прикрепляет право к роли (идемпотентно: повтор — успех).
+	// Роль/право не найдены → NotFound; системная роль → FailedPrecondition.
+	// Возвращает актуальный набор прав роли.
+	AttachPermission(ctx context.Context, in *AttachPermissionRequest, opts ...grpc.CallOption) (*AttachPermissionResponse, error)
+	// DetachPermission открепляет право от роли (идемпотентно: открепление
+	// непривязанного — успех). Роль не найдена → NotFound; системная роль →
+	// FailedPrecondition. Возвращает актуальный набор прав роли.
+	DetachPermission(ctx context.Context, in *DetachPermissionRequest, opts ...grpc.CallOption) (*DetachPermissionResponse, error)
+}
+
+type iamCatalogServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewIamCatalogServiceClient(cc grpc.ClientConnInterface) IamCatalogServiceClient {
+	return &iamCatalogServiceClient{cc}
+}
+
+func (c *iamCatalogServiceClient) CreateRole(ctx context.Context, in *CreateRoleRequest, opts ...grpc.CallOption) (*CreateRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateRoleResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_CreateRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamCatalogServiceClient) DeleteRole(ctx context.Context, in *DeleteRoleRequest, opts ...grpc.CallOption) (*DeleteRoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteRoleResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_DeleteRole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamCatalogServiceClient) CreatePermission(ctx context.Context, in *CreatePermissionRequest, opts ...grpc.CallOption) (*CreatePermissionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreatePermissionResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_CreatePermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamCatalogServiceClient) DeletePermission(ctx context.Context, in *DeletePermissionRequest, opts ...grpc.CallOption) (*DeletePermissionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeletePermissionResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_DeletePermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamCatalogServiceClient) AttachPermission(ctx context.Context, in *AttachPermissionRequest, opts ...grpc.CallOption) (*AttachPermissionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AttachPermissionResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_AttachPermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *iamCatalogServiceClient) DetachPermission(ctx context.Context, in *DetachPermissionRequest, opts ...grpc.CallOption) (*DetachPermissionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DetachPermissionResponse)
+	err := c.cc.Invoke(ctx, IamCatalogService_DetachPermission_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// IamCatalogServiceServer is the server API for IamCatalogService service.
+// All implementations must embed UnimplementedIamCatalogServiceServer
+// for forward compatibility.
+//
+// IamCatalogService — мутирующий контракт каталога IAM (ADR-0015): структурные
+// изменения самого каталога ролей/прав — создание/удаление ролей и прав,
+// правка набора прав роли (attach/detach). Путь привилегированный: gateway
+// проверяет право (manage, iam:global) перед КАЖДОЙ ручкой (fail-closed),
+// отдельно и привилегированнее, чем write (assign/revoke). Любая структурная
+// мутация → ШИРОКАЯ инвалидация кэша решений (поколение idm:cache:gen), т.к.
+// правка role_permissions/удаление роли затрагивает ВСЕХ носителей роли.
+// Системные (сидированные) роли/права защищены от удаления и правки набора прав
+// (FailedPrecondition). Расширение аддитивно (wire-совместимо): новый сервис и
+// сообщения, существующие RPC не меняются. Мутации привязок субъект↔роль
+// выполняет RoleAdminService (переиспользуется, не дублируется).
+type IamCatalogServiceServer interface {
+	// CreateRole создаёт пользовательскую роль (system=false). Дубль имени →
+	// AlreadyExists (не идемпотентно); пустое имя → InvalidArgument.
+	CreateRole(context.Context, *CreateRoleRequest) (*CreateRoleResponse, error)
+	// DeleteRole удаляет роль (каскад subject_roles/role_permissions). Системная
+	// роль → FailedPrecondition; несуществующая → NotFound.
+	DeleteRole(context.Context, *DeleteRoleRequest) (*DeleteRoleResponse, error)
+	// CreatePermission создаёт пользовательское право (system=false). Дубль пары
+	// (action, resource) → AlreadyExists; пустые поля → InvalidArgument.
+	CreatePermission(context.Context, *CreatePermissionRequest) (*CreatePermissionResponse, error)
+	// DeletePermission удаляет право (каскад role_permissions). Системное право →
+	// FailedPrecondition; несуществующее → NotFound.
+	DeletePermission(context.Context, *DeletePermissionRequest) (*DeletePermissionResponse, error)
+	// AttachPermission прикрепляет право к роли (идемпотентно: повтор — успех).
+	// Роль/право не найдены → NotFound; системная роль → FailedPrecondition.
+	// Возвращает актуальный набор прав роли.
+	AttachPermission(context.Context, *AttachPermissionRequest) (*AttachPermissionResponse, error)
+	// DetachPermission открепляет право от роли (идемпотентно: открепление
+	// непривязанного — успех). Роль не найдена → NotFound; системная роль →
+	// FailedPrecondition. Возвращает актуальный набор прав роли.
+	DetachPermission(context.Context, *DetachPermissionRequest) (*DetachPermissionResponse, error)
+	mustEmbedUnimplementedIamCatalogServiceServer()
+}
+
+// UnimplementedIamCatalogServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedIamCatalogServiceServer struct{}
+
+func (UnimplementedIamCatalogServiceServer) CreateRole(context.Context, *CreateRoleRequest) (*CreateRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateRole not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) DeleteRole(context.Context, *DeleteRoleRequest) (*DeleteRoleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteRole not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) CreatePermission(context.Context, *CreatePermissionRequest) (*CreatePermissionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreatePermission not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) DeletePermission(context.Context, *DeletePermissionRequest) (*DeletePermissionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeletePermission not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) AttachPermission(context.Context, *AttachPermissionRequest) (*AttachPermissionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AttachPermission not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) DetachPermission(context.Context, *DetachPermissionRequest) (*DetachPermissionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DetachPermission not implemented")
+}
+func (UnimplementedIamCatalogServiceServer) mustEmbedUnimplementedIamCatalogServiceServer() {}
+func (UnimplementedIamCatalogServiceServer) testEmbeddedByValue()                           {}
+
+// UnsafeIamCatalogServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to IamCatalogServiceServer will
+// result in compilation errors.
+type UnsafeIamCatalogServiceServer interface {
+	mustEmbedUnimplementedIamCatalogServiceServer()
+}
+
+func RegisterIamCatalogServiceServer(s grpc.ServiceRegistrar, srv IamCatalogServiceServer) {
+	// If the following call panics, it indicates UnimplementedIamCatalogServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&IamCatalogService_ServiceDesc, srv)
+}
+
+func _IamCatalogService_CreateRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).CreateRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_CreateRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).CreateRole(ctx, req.(*CreateRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamCatalogService_DeleteRole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).DeleteRole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_DeleteRole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).DeleteRole(ctx, req.(*DeleteRoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamCatalogService_CreatePermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).CreatePermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_CreatePermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).CreatePermission(ctx, req.(*CreatePermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamCatalogService_DeletePermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).DeletePermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_DeletePermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).DeletePermission(ctx, req.(*DeletePermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamCatalogService_AttachPermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttachPermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).AttachPermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_AttachPermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).AttachPermission(ctx, req.(*AttachPermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IamCatalogService_DetachPermission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DetachPermissionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IamCatalogServiceServer).DetachPermission(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IamCatalogService_DetachPermission_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IamCatalogServiceServer).DetachPermission(ctx, req.(*DetachPermissionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// IamCatalogService_ServiceDesc is the grpc.ServiceDesc for IamCatalogService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var IamCatalogService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "idm.v1.IamCatalogService",
+	HandlerType: (*IamCatalogServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateRole",
+			Handler:    _IamCatalogService_CreateRole_Handler,
+		},
+		{
+			MethodName: "DeleteRole",
+			Handler:    _IamCatalogService_DeleteRole_Handler,
+		},
+		{
+			MethodName: "CreatePermission",
+			Handler:    _IamCatalogService_CreatePermission_Handler,
+		},
+		{
+			MethodName: "DeletePermission",
+			Handler:    _IamCatalogService_DeletePermission_Handler,
+		},
+		{
+			MethodName: "AttachPermission",
+			Handler:    _IamCatalogService_AttachPermission_Handler,
+		},
+		{
+			MethodName: "DetachPermission",
+			Handler:    _IamCatalogService_DetachPermission_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "idm/v1/idm.proto",
+}

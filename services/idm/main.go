@@ -152,6 +152,10 @@ func run() error {
 	decisionCache := cache.New(rdb, ttlAllow, ttlDeny)
 	authz := usecase.New(repo, decisionCache)
 	roles := usecase.NewRoleManager(repo, decisionCache)
+	// Менеджер структурных мутаций каталога (ADR-0015): после каждой записи —
+	// ШИРОКАЯ инвалидация кэша решений (поколение), т.к. правка role_permissions/
+	// удаление роли затрагивает всех носителей роли.
+	catalogMgr := usecase.NewCatalogManager(repo, decisionCache)
 
 	grpcSrv := grpc.NewServer(grpcx.ServerOptions(log, verifier)...)
 	idmv1.RegisterAccessServiceServer(grpcSrv, &accessServer{auth: authz, log: log})
@@ -159,6 +163,9 @@ func run() error {
 	// Читающий каталог IAM-админки (ADR-0014): repo как catalogReader, только
 	// чтение (без побочных эффектов на кэш решений).
 	idmv1.RegisterIamAdminServiceServer(grpcSrv, &iamAdminServer{catalog: repo, log: log})
+	// Мутирующий каталог IAM (ADR-0015): структурные правки ролей/прав под широкой
+	// инвалидацией кэша; системные роли/права защищены от изменения.
+	idmv1.RegisterIamCatalogServiceServer(grpcSrv, &iamCatalogServer{catalog: catalogMgr, log: log})
 
 	lis, err := net.Listen("tcp", config.String("GRPC_ADDR", ":9090"))
 	if err != nil {

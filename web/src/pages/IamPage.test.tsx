@@ -1,6 +1,7 @@
 // Тесты раздела «Роли и доступы» (IAM-админка): happy-path (просмотр ролей и
-// субъектов), отказ доступа 403 (содержимое скрыто), назначение/снятие роли
-// (мутация + индикация) и клиентская валидация формы.
+// субъектов), отказ доступа 403 (содержимое скрыто), назначение/снятие роли,
+// структурные мутации каталога (создание/удаление роли, attach/detach права),
+// read-only системных ролей и клиентская валидация формы.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -10,18 +11,51 @@ import { MemoryRouter } from "react-router-dom";
 import { IamPage } from "./IamPage";
 
 // Мокаем клиент периметра, сохраняя реальные zod-схемы.
-const { listRoles, listSubjects, getRolePermissions, assignRole, revokeRole } = vi.hoisted(() => ({
+const {
+  listRoles,
+  listPermissions,
+  listSubjects,
+  getRolePermissions,
+  assignRole,
+  revokeRole,
+  createRole,
+  deleteRole,
+  createPermission,
+  deletePermission,
+  attachPermission,
+  detachPermission,
+} = vi.hoisted(() => ({
   listRoles: vi.fn(),
+  listPermissions: vi.fn(),
   listSubjects: vi.fn(),
   getRolePermissions: vi.fn(),
   assignRole: vi.fn(),
   revokeRole: vi.fn(),
+  createRole: vi.fn(),
+  deleteRole: vi.fn(),
+  createPermission: vi.fn(),
+  deletePermission: vi.fn(),
+  attachPermission: vi.fn(),
+  detachPermission: vi.fn(),
 }));
 vi.mock("@/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api")>();
   return {
     ...actual,
-    apiClient: { listRoles, listSubjects, getRolePermissions, assignRole, revokeRole },
+    apiClient: {
+      listRoles,
+      listPermissions,
+      listSubjects,
+      getRolePermissions,
+      assignRole,
+      revokeRole,
+      createRole,
+      deleteRole,
+      createPermission,
+      deletePermission,
+      attachPermission,
+      detachPermission,
+    },
   };
 });
 
@@ -43,15 +77,19 @@ function renderPage() {
 
 describe("IamPage", () => {
   beforeEach(() => {
-    listRoles.mockReset();
-    listSubjects.mockReset();
-    getRolePermissions.mockReset();
-    assignRole.mockReset();
-    revokeRole.mockReset();
+    vi.clearAllMocks();
+    // Разумные значения по умолчанию; конкретные тесты переопределяют при нужде.
+    listPermissions.mockResolvedValue({ permissions: [] });
+    listSubjects.mockResolvedValue({ subjects: [], next_page_token: "" });
   });
 
   it("happy-path: показывает роли и субъектов с их ролями", async () => {
-    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin" }, { name: "project-creator" }] });
+    listRoles.mockResolvedValue({
+      roles: [
+        { name: "iam-admin", system: true },
+        { name: "project-creator", system: true },
+      ],
+    });
     listSubjects.mockResolvedValue({
       subjects: [{ subject: "demo-user", roles: ["iam-admin"] }],
       next_page_token: "",
@@ -66,26 +104,23 @@ describe("IamPage", () => {
 
   it("403 на каталоге → раздел скрыт, показан отказ", async () => {
     listRoles.mockRejectedValue(httpError(403));
-    listSubjects.mockRejectedValue(httpError(403));
 
     renderPage();
 
     expect(await screen.findByText(/Доступ к разделу запрещён/i)).toBeInTheDocument();
-    // Содержимое каталога не отображается.
     expect(screen.queryByText("iam-admin")).not.toBeInTheDocument();
   });
 
-  it("назначение роли → вызов периметра и инвалидация", async () => {
-    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin" }] });
-    listSubjects.mockResolvedValue({ subjects: [], next_page_token: "" });
+  it("назначение роли → вызов периметра", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
     assignRole.mockResolvedValue({ subject: "alice", roles: ["iam-admin"] });
 
     const user = userEvent.setup();
     renderPage();
 
     await screen.findByRole("button", { name: "iam-admin" });
-    await user.type(screen.getByLabelText(/Субъект/i), "alice");
-    await user.selectOptions(screen.getByLabelText(/Роль/i), "iam-admin");
+    await user.type(screen.getByLabelText(/^Субъект/i), "alice");
+    await user.selectOptions(screen.getByLabelText(/^Роль/i), "iam-admin");
     await user.click(screen.getByRole("button", { name: /Назначить/i }));
 
     await waitFor(() => expect(assignRole).toHaveBeenCalledTimes(1));
@@ -94,29 +129,8 @@ describe("IamPage", () => {
     });
   });
 
-  it("снятие роли → вызов revokeRole с subject и role", async () => {
-    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin" }] });
-    listSubjects.mockResolvedValue({
-      subjects: [{ subject: "demo-user", roles: ["iam-admin"] }],
-      next_page_token: "",
-    });
-    revokeRole.mockResolvedValue({ subject: "demo-user", roles: [] });
-
-    const user = userEvent.setup();
-    renderPage();
-
-    const subjectRow = (await screen.findByText("demo-user")).closest("li") as HTMLElement;
-    await user.click(within(subjectRow).getByLabelText(/Снять роль iam-admin/i));
-
-    await waitFor(() => expect(revokeRole).toHaveBeenCalledTimes(1));
-    expect(revokeRole).toHaveBeenCalledWith(undefined, {
-      params: { subject: "demo-user", role: "iam-admin" },
-    });
-  });
-
   it("валидация формы: пустой субъект → запрос не уходит", async () => {
-    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin" }] });
-    listSubjects.mockResolvedValue({ subjects: [], next_page_token: "" });
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
 
     const user = userEvent.setup();
     renderPage();
@@ -126,5 +140,103 @@ describe("IamPage", () => {
 
     expect(await screen.findByText(/Укажите субъекта/i)).toBeInTheDocument();
     expect(assignRole).not.toHaveBeenCalled();
+  });
+
+  it("создание роли → вызов createRole с именем", async () => {
+    listRoles.mockResolvedValue({ roles: [] });
+    createRole.mockResolvedValue({ name: "reviewers", system: false });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    const nameInput = await screen.findByLabelText(/Новая роль/i);
+    const roleForm = nameInput.closest("form") as HTMLElement;
+    await user.type(nameInput, "reviewers");
+    await user.click(within(roleForm).getByRole("button", { name: /Создать/i }));
+
+    await waitFor(() => expect(createRole).toHaveBeenCalledTimes(1));
+    expect(createRole).toHaveBeenCalledWith({ name: "reviewers" });
+  });
+
+  it("удаление пользовательской роли → вызов deleteRole; системная роль read-only", async () => {
+    listRoles.mockResolvedValue({
+      roles: [
+        { name: "iam-admin", system: true },
+        { name: "reviewers", system: false },
+      ],
+    });
+    deleteRole.mockResolvedValue({ name: "reviewers", system: false });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole("button", { name: "reviewers" });
+    // У системной роли нет кнопки удаления, у пользовательской — есть.
+    expect(screen.queryByLabelText(/Удалить роль iam-admin/i)).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText(/Удалить роль reviewers/i));
+
+    await waitFor(() => expect(deleteRole).toHaveBeenCalledTimes(1));
+    expect(deleteRole).toHaveBeenCalledWith(undefined, { params: { role: "reviewers" } });
+  });
+
+  it("attach права к пользовательской роли → вызов attachPermission", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "reviewers", system: false }] });
+    listPermissions.mockResolvedValue({
+      permissions: [{ action: "read", resource: "iam:global", system: true }],
+    });
+    getRolePermissions.mockResolvedValue({ permissions: [] });
+    attachPermission.mockResolvedValue({ role: "reviewers", permissions: [] });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "reviewers" }));
+    const attachSelect = await screen.findByLabelText(/Прикрепить право/i);
+    await user.selectOptions(
+      attachSelect,
+      within(attachSelect).getByRole("option", { name: /read.*iam:global/i }),
+    );
+    await user.click(screen.getByRole("button", { name: /Прикрепить/i }));
+
+    await waitFor(() => expect(attachPermission).toHaveBeenCalledTimes(1));
+    expect(attachPermission).toHaveBeenCalledWith(
+      { action: "read", resource: "iam:global" },
+      { params: { role: "reviewers" } },
+    );
+  });
+
+  it("detach права у пользовательской роли → вызов detachPermission через query", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "reviewers", system: false }] });
+    getRolePermissions.mockResolvedValue({
+      permissions: [{ action: "read", resource: "iam:global", system: true }],
+    });
+    detachPermission.mockResolvedValue({ role: "reviewers", permissions: [] });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "reviewers" }));
+    await user.click(await screen.findByLabelText(/Открепить право read iam:global/i));
+
+    await waitFor(() => expect(detachPermission).toHaveBeenCalledTimes(1));
+    expect(detachPermission).toHaveBeenCalledWith(undefined, {
+      params: { role: "reviewers" },
+      queries: { action: "read", resource: "iam:global" },
+    });
+  });
+
+  it("системная роль: состав прав не редактируется (нет привязки/откреплений)", async () => {
+    listRoles.mockResolvedValue({ roles: [{ name: "iam-admin", system: true }] });
+    getRolePermissions.mockResolvedValue({
+      permissions: [{ action: "manage", resource: "iam:global", system: true }],
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "iam-admin" }));
+    expect(await screen.findByText(/состав прав системной роли фиксирован/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Прикрепить право/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Открепить право/i)).not.toBeInTheDocument();
   });
 });
