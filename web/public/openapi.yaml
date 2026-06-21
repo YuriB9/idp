@@ -1,0 +1,615 @@
+openapi: 3.1.0
+info:
+  title: IDP Perimeter API
+  version: 0.3.0
+  description: >
+    Контракт периметра (портал ↔ API-шлюз) платформы IDP. Источник правды для
+    кодогена TS-клиента и zod-схем.
+servers:
+  - url: /api
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Liveness-проба периметра
+      responses:
+        "200":
+          description: Сервис жив
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /projects/{project}/services:
+    get:
+      operationId: listServices
+      summary: Список сервисов проекта с keyset-пагинацией
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - name: page_size
+          in: query
+          required: false
+          description: >
+            Желаемый размер страницы; сервер клампит к допустимому пределу.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+        - name: page_token
+          in: query
+          required: false
+          description: >
+            Непрозрачный курсор продолжения из предыдущего ответа; пустой —
+            с начала выборки.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Страница сервисов проекта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      operationId: createService
+      summary: Запуск создания сервиса в проекте
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceRequest"
+      responses:
+        "201":
+          description: Создание запущено, запись зафиксирована со статусом creating
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateServiceResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /projects/{project}/services/{name}:
+    get:
+      operationId: getService
+      summary: Чтение статуса одного сервиса проекта
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      responses:
+        "200":
+          description: Текущее состояние сервиса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /projects/{project}/services/{name}/decommission:
+    post:
+      operationId: decommissionService
+      summary: Вывод сервиса из эксплуатации (soft delete)
+      description: >
+        Выводит активный сервис из эксплуатации (soft delete): данные каталога
+        сохраняются, статус переводится в decommissioned, во внешних системах
+        отзывается доступ (GitLab archive, Harbor read-only, Vault revoke).
+        Тело несёт явное предусловие load_drained (нагрузка снята из K8s, ADR-0012).
+        Идемпотентно: повтор на уже выведенном сервисе → 200. Допустим только
+        исходный статус active; предусловие не выполнено (нагрузка не снята или
+        статус creating/failed) → 422; конкурентная смена статуса → 409; отсутствие
+        сервиса → 404; отказ RBAC (право decommission) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecommissionServiceRequest"
+      responses:
+        "200":
+          description: Вывод из эксплуатации запущен (или сервис уже выведен)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
+  /projects/{project}/services/{name}/owners:
+    put:
+      operationId: setServiceOwners
+      summary: Декларативная замена набора владельцев сервиса
+      description: >
+        Заменяет набор владельцев целиком (идемпотентно). Клиент передаёт полный
+        желаемый набор owners и текущую версию owners_version
+        (optimistic-concurrency). Несовпадение версии → 409; отсутствие сервиса →
+        404; отказ RBAC (право change_owners) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetServiceOwnersRequest"
+      responses:
+        "200":
+          description: Изменение владельцев запущено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetServiceOwnersResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /projects/{project}/services/{name}/transfer:
+    post:
+      operationId: transferService
+      summary: Перенос сервиса в другой проект
+      description: >
+        Переносит сервис в другой проект (смена project-владельца): id записи
+        каталога сохраняется, меняется проект (source→target), владельцы переезжают
+        вместе с записью. Перенос выполняется асинхронно (Saga) с ТОЧКОЙ НЕВОЗВРАТА
+        на переносе репозитория GitLab: каталог active→transferring → transfer
+        GitLab → миграция путей Vault → метаданные Harbor → каталог
+        transferring→active (project=target) → перенос ролей владельцев в IDM.
+        Требует ДВУХ прав: transfer на исходном проекте И transfer_in на целевом
+        (ADR-0013). Идемпотентно: повтор на уже перенесённом сервисе → 200.
+        Допустим только исходный статус active; недопустимый статус → 422; занятое
+        имя в target или конкурентная смена → 409; отсутствие сервиса → 404; отказ
+        RBAC (transfer/transfer_in) → 403.
+      parameters:
+        - $ref: "#/components/parameters/ProjectPath"
+        - $ref: "#/components/parameters/ServiceNamePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferServiceRequest"
+      responses:
+        "200":
+          description: Перенос запущен (или сервис уже перенесён)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/PreconditionFailed"
+  /iam/roles:
+    get:
+      operationId: listRoles
+      summary: Список ролей каталога RBAC
+      description: >
+        Возвращает все роли каталога (read-only). Привилегированная ручка
+        IAM-админки: требует право (read, iam:global); отказ/недоступность IDM →
+        403 (fail-closed). Роли/права сидируются миграциями — UI их только
+        показывает (ADR-0014).
+      responses:
+        "200":
+          description: Список ролей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/permissions:
+    get:
+      operationId: listPermissions
+      summary: Список прав каталога RBAC
+      description: >
+        Возвращает все права каталога (read-only). Требует право (read,
+        iam:global); отказ/недоступность IDM → 403 (fail-closed).
+      responses:
+        "200":
+          description: Список прав
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/roles/{role}/permissions:
+    get:
+      operationId: getRolePermissions
+      summary: Права конкретной роли
+      description: >
+        Возвращает права роли (read-only). Требует право (read, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed); несуществующая роль → 404.
+      parameters:
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Права роли
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionList"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /iam/subjects:
+    get:
+      operationId: listSubjects
+      summary: Субъекты с их ролями
+      description: >
+        Возвращает страницу субъектов (DISTINCT subject из subject_roles) с их
+        ролями; keyset-пагинация по subject. Субъекты без ролей системе
+        неизвестны и не возвращаются. Требует право (read, iam:global);
+        отказ/недоступность IDM → 403 (fail-closed).
+      parameters:
+        - $ref: "#/components/parameters/PageSizeQuery"
+        - $ref: "#/components/parameters/PageTokenQuery"
+      responses:
+        "200":
+          description: Страница субъектов с ролями
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/subjects/{subject}/roles:
+    get:
+      operationId: getSubjectRoles
+      summary: Роли конкретного субъекта
+      description: >
+        Возвращает роли субъекта (пустой набор, не 404, если ролей нет). Требует
+        право (read, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+      responses:
+        "200":
+          description: Роли субъекта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /iam/subjects/{subject}/roles/{role}:
+    post:
+      operationId: assignRole
+      summary: Назначить роль субъекту
+      description: >
+        Назначает субъекту существующую роль (идемпотентно: повтор → 200). Требует
+        право (write, iam:global); отказ/недоступность IDM → 403 (fail-closed).
+        Несуществующая роль → 404; пустые subject/role → 400. После мутации IDM
+        инвалидирует кэш решений по субъекту. Ответ — актуальный набор ролей
+        субъекта (ADR-0014).
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Роль назначена (или уже была назначена)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: revokeRole
+      summary: Снять роль с субъекта
+      description: >
+        Снимает у субъекта роль (идемпотентно: снятие отсутствующей связки → 200).
+        Требует право (write, iam:global); отказ/недоступность IDM → 403
+        (fail-closed); пустые subject/role → 400. После мутации IDM инвалидирует
+        кэш решений по субъекту. Ответ — актуальный набор ролей субъекта.
+      parameters:
+        - $ref: "#/components/parameters/SubjectPath"
+        - $ref: "#/components/parameters/RolePath"
+      responses:
+        "200":
+          description: Роль снята (или её и не было)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubjectRoles"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  parameters:
+    ProjectPath:
+      name: project
+      in: path
+      required: true
+      description: Идентификатор проекта-владельца.
+      schema:
+        type: string
+        minLength: 1
+    ServiceNamePath:
+      name: name
+      in: path
+      required: true
+      description: Имя сервиса внутри проекта.
+      schema:
+        type: string
+        minLength: 1
+    SubjectPath:
+      name: subject
+      in: path
+      required: true
+      description: Идентификатор субъекта (sub из JWT).
+      schema:
+        type: string
+        minLength: 1
+    RolePath:
+      name: role
+      in: path
+      required: true
+      description: Имя роли каталога RBAC.
+      schema:
+        type: string
+        minLength: 1
+    PageSizeQuery:
+      name: page_size
+      in: query
+      required: false
+      description: >
+        Желаемый размер страницы; сервер клампит к допустимому пределу.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+    PageTokenQuery:
+      name: page_token
+      in: query
+      required: false
+      description: >
+        Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала
+        выборки.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Некорректный запрос (валидация входных данных)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Конфликт состояния (например, имя сервиса уже занято)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Доступ запрещён (RBAC, fail-closed)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PreconditionFailed:
+      description: >
+        Предусловие операции не выполнено (например, нагрузка не снята из K8s или
+        недопустимый исходный статус сервиса).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    ServiceStatus:
+      type: string
+      description: Статус сервиса в каталоге (ADR-0004).
+      enum: [creating, active, decommissioned, failed, transferring]
+    ServiceSummary:
+      type: object
+      required: [project, name, status, owners, owners_version]
+      properties:
+        project:
+          type: string
+        name:
+          type: string
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+        owners:
+          type: array
+          description: Набор владельцев сервиса (детерминированный порядок).
+          items:
+            type: string
+        owners_version:
+          type: integer
+          format: int64
+          description: Версия набора владельцев для optimistic-concurrency.
+        decommissioned_at:
+          type: string
+          description: >
+            Момент вывода сервиса из эксплуатации (RFC3339); отсутствует/пусто,
+            если сервис не выведен (ADR-0012).
+    ServiceList:
+      type: object
+      required: [services, next_page_token]
+      properties:
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/ServiceSummary"
+        next_page_token:
+          type: string
+          description: Курсор следующей страницы; пустой — конец выборки.
+    CreateServiceRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Имя создаваемого сервиса внутри проекта.
+    CreateServiceResult:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Идентификатор созданной записи каталога.
+        status:
+          $ref: "#/components/schemas/ServiceStatus"
+    SetServiceOwnersRequest:
+      type: object
+      required: [owners, owners_version]
+      properties:
+        owners:
+          type: array
+          description: >
+            Полный желаемый набор владельцев (декларативно). Без пустых строк и
+            дублей; сервер вычисляет diff против текущего состояния.
+          items:
+            type: string
+            minLength: 1
+        owners_version:
+          type: integer
+          format: int64
+          description: Ожидаемая версия набора владельцев (optimistic-concurrency).
+    SetServiceOwnersResult:
+      type: object
+      required: [owners, owners_version]
+      properties:
+        owners:
+          type: array
+          description: Итоговый набор владельцев после применения.
+          items:
+            type: string
+        owners_version:
+          type: integer
+          format: int64
+          description: Новая версия набора владельцев.
+    DecommissionServiceRequest:
+      type: object
+      required: [load_drained]
+      properties:
+        load_drained:
+          type: boolean
+          description: >
+            Явное предусловие: нагрузка сервиса снята из K8s. В MVP K8s-worker
+            отсутствует, поэтому снятие подтверждается клиентом (ADR-0012).
+            false → 422 до любых побочных эффектов.
+    TransferServiceRequest:
+      type: object
+      required: [target_project]
+      properties:
+        target_project:
+          type: string
+          minLength: 1
+          description: >
+            Целевой проект-владелец (target), в который переносится сервис. Должен
+            отличаться от исходного проекта; пара (target_project, name) должна
+            быть свободна, иначе 409.
+    Role:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: >
+            Имя роли — её стабильный идентификатор (им оперируют assign/revoke);
+            внутренний id наружу не отдаётся (ADR-0014).
+    Permission:
+      type: object
+      required: [action, resource]
+      properties:
+        action:
+          type: string
+          description: Действие (например, read, write, create).
+        resource:
+          type: string
+          description: Целевой ресурс (например, iam:global, project:demo).
+    RoleList:
+      type: object
+      required: [roles]
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Role"
+    PermissionList:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Permission"
+    SubjectRoles:
+      type: object
+      required: [subject, roles]
+      properties:
+        subject:
+          type: string
+          description: Идентификатор субъекта (sub из JWT).
+        roles:
+          type: array
+          description: Имена ролей субъекта (пусто, если ролей нет).
+          items:
+            type: string
+    SubjectList:
+      type: object
+      required: [subjects, next_page_token]
+      properties:
+        subjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubjectRoles"
+        next_page_token:
+          type: string
+          description: Курсор следующей страницы; пустой — конец выборки.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: >
+            Стабильное сообщение об ошибке для клиента. Внутренние детали
+            (текст gRPC-ошибки) сюда НЕ попадают — только в лог сервера.

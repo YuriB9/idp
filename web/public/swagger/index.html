@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  Swagger UI портала IDP — интерактивная документация периметра (ADR-0009).
+  Статическая страница (вне SPA react-router): отдаётся напрямую из public/.
+  Спецификация берётся из /openapi.yaml (копия openapi/openapi.yaml, кладётся
+  кодогеном `npm run gen`). Запросы «Try it out» идут same-origin на /api и
+  проксируются на gateway (dev — vite-прокси :8081; локалка — oauth2-proxy).
+  Ассеты Swagger UI подключаются с CDN с ЗАКРЕПЛЁННОЙ версией.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IDP API — Swagger UI</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"
+    />
+    <style>
+      /* Лёгкая тёмная подложка под единый язык портала до загрузки UI. */
+      body {
+        margin: 0;
+        background: #fafafa;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script
+      src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js"
+      crossorigin
+    ></script>
+    <script>
+      // Инициализация Swagger UI после загрузки бандла.
+      window.onload = () => {
+        window.ui = SwaggerUIBundle({
+          // Спецификация периметра (server url = /api).
+          url: "/openapi.yaml",
+          dom_id: "#swagger-ui",
+          deepLinking: true,
+          presets: [
+            SwaggerUIBundle.presets.apis,
+            SwaggerUIStandalonePreset,
+          ],
+          layout: "StandaloneLayout",
+          // «Try it out» включён по умолчанию; запросы — same-origin на /api,
+          // куки передаём (локально oauth2-proxy/AUTH_DISABLED).
+          tryItOutEnabled: true,
+          withCredentials: true,
+        });
+      };
+    </script>
+  </body>
+</html>

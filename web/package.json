@@ -11,8 +11,9 @@
     "test": "vitest run",
     "gen:types": "openapi-typescript ../openapi/openapi.yaml -o src/api/schema.ts",
     "gen:zod": "openapi-zod-client ../openapi/openapi.yaml -o src/api/client.ts --export-schemas",
-    "gen": "npm run gen:types && npm run gen:zod",
-    "gen:check": "npm run gen && git diff --exit-code src/api"
+    "gen:spec": "node -e \"require('fs').copyFileSync('../openapi/openapi.yaml','public/openapi.yaml')\"",
+    "gen": "npm run gen:types && npm run gen:zod && npm run gen:spec",
+    "gen:check": "npm run gen && git diff --exit-code src/api public/openapi.yaml"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.1",
