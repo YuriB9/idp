@@ -116,3 +116,30 @@ K8s-worker.
 go test ./...        # из каталога нужного модуля (go.work)
 cd web && npm test   # vitest: zod-валидация ответов и happy-path формы
 ```
+
+## Конформанс периметра (Schemathesis)
+
+`gen:check` ловит рассинхрон OpenAPI↔TS, Spectral — качество самой спеки, но ни
+то, ни другое не проверяет, что **живой gateway** реально отвечает так, как
+описано (схемы ответов, коды, content-type). Эту проверку «доки vs реальность»
+делает [Schemathesis](https://schemathesis.readthedocs.io) против поднятого
+стенда — property-based: генерит входы из OpenAPI и сверяет каждый ответ со
+схемой. Закреплённый Docker-образ, локальный ручной прогон (в CI пока не
+включён).
+
+```bash
+# 1) поднять стенд (gateway на :8081, AUTH_DISABLED + засеян demo-user)
+docker compose -f deploy/compose/docker-compose.yml up -d --build
+
+# 2) прогнать конформанс периметра
+make conformance
+# параметры: make conformance GATEWAY_BASE_URL=http://localhost:8081/api CONF_EXAMPLES=50
+```
+
+Охват на старте — только **GET-ручки**; мутации (`create`/`owners`/
+`decommission`/`transfer`/`assign`/`revoke`) исключены, чтобы не менять состояние
+и не дёргать Temporal, а `/healthz` — потому что живёт в корне, не под `/api`.
+Это инструмент **обнаружения**: первый прогон закономерно подсветит реальные
+расхождения контракта (например, читающие ручки `listServices`/`getService`
+могут вернуть `403` по RBAC, хотя в спеке у них описаны только `200`/`404`/`400`).
+Полный stateful-прогон всех ручек (с Temporal/worker/моками) — отдельная фаза.

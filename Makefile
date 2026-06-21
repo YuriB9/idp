@@ -14,7 +14,14 @@ IDM_MIGRATIONS := $(CURDIR)/services/idm/migrations
 # GOOSE_CMD — команда goose (up|down|status|...).
 GOOSE_CMD ?= up
 
-.PHONY: tools proto openapi gen test lint lint-openapi tidy tidy-check migrate-projects migrate-idm
+# Конформанс-тестирование периметра Schemathesis (закреплённый Docker-образ).
+# GATEWAY_BASE_URL — база живого gateway с префиксом /api (compose публикует :8081).
+SCHEMATHESIS_IMAGE ?= schemathesis/schemathesis:4.21.10
+GATEWAY_BASE_URL ?= http://localhost:8081/api
+# CONF_EXAMPLES — число генерируемых примеров на операцию (баланс охвата/времени).
+CONF_EXAMPLES ?= 25
+
+.PHONY: tools proto openapi gen test lint lint-openapi tidy tidy-check migrate-projects migrate-idm conformance
 
 ## tools: собрать пинованные инструменты кодогена в tools/bin
 tools:
@@ -54,6 +61,25 @@ gen: proto openapi
 ## test: тесты всех модулей с race+shuffle
 test:
 	@for m in $(MODULES); do echo ">> test $$m"; (cd $$m && go test -race -shuffle=on ./...) || exit 1; done
+
+## conformance: конформанс-тест периметра Schemathesis против ЖИВОГО стенда.
+## Проверяет, что РАНТАЙМ gateway соответствует openapi/openapi.yaml (схемы
+## ответов, коды, content-type) — закрывает разрыв «доки vs реальность», который
+## не ловят codegen-check и Spectral. Локальный ручной прогон (не в CI пока).
+##
+## Предусловие: поднят стенд (docker compose ... up), gateway на :8081,
+## AUTH_DISABLED=true + засеян demo-user. На старте охват — только GET-ручки
+## (мутации create/owners/decommission/transfer/assign/revoke исключены, чтобы не
+## трогать состояние и Temporal); /healthz исключён (живёт в корне, не под /api).
+## Запуск: make conformance [GATEWAY_BASE_URL=...] [CONF_EXAMPLES=N]
+conformance:
+	docker run --rm --network host \
+		-v "$(CURDIR)/openapi:/spec:ro" \
+		$(SCHEMATHESIS_IMAGE) run /spec/openapi.yaml \
+		--url "$(GATEWAY_BASE_URL)" \
+		--include-method GET \
+		--exclude-path /healthz \
+		--max-examples=$(CONF_EXAMPLES)
 
 ## tidy: go mod tidy по всем модулям
 tidy:
