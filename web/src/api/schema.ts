@@ -407,7 +407,7 @@ export interface components {
         SubjectPath: string;
         /** @description Имя роли каталога RBAC. */
         RolePath: string;
-        /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+        /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. Значение должно укладываться в int32 (1..2147483647); выход за диапазон — 400. */
         PageSizeQuery: number;
         /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
         PageTokenQuery: string;
@@ -441,7 +441,7 @@ export interface operations {
     listServices: {
         parameters: {
             query?: {
-                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. Значение должно укладываться в int32 (1..2147483647); выход за диапазон — 400. */
                 page_size?: number;
                 /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
                 page_token?: string;
@@ -465,6 +465,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createService: {
@@ -493,6 +494,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
         };
     };
@@ -519,6 +521,7 @@ export interface operations {
                     "application/json": components["schemas"]["ServiceSummary"];
                 };
             };
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -693,7 +696,7 @@ export interface operations {
     listSubjects: {
         parameters: {
             query?: {
-                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. */
+                /** @description Желаемый размер страницы; сервер клампит к допустимому пределу. Значение должно укладываться в int32 (1..2147483647); выход за диапазон — 400. */
                 page_size?: components["parameters"]["PageSizeQuery"];
                 /** @description Непрозрачный курсор продолжения из предыдущего ответа; пустой — с начала выборки. */
                 page_token?: components["parameters"]["PageTokenQuery"];

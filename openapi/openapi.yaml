@@ -37,10 +37,13 @@ paths:
           required: false
           description: >
             Желаемый размер страницы; сервер клампит к допустимому пределу.
+            Значение должно укладываться в int32 (1..2147483647); выход за
+            диапазон — 400.
           schema:
             type: integer
             format: int32
             minimum: 1
+            maximum: 2147483647
         - name: page_token
           in: query
           required: false
@@ -58,6 +61,8 @@ paths:
                 $ref: "#/components/schemas/ServiceList"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
     post:
       operationId: createService
       summary: Запуск создания сервиса в проекте
@@ -83,6 +88,8 @@ paths:
                 $ref: "#/components/schemas/CreateServiceResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
   /projects/{project}/services/{name}:
@@ -103,6 +110,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceSummary"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /projects/{project}/services/{name}/decommission:
@@ -401,11 +410,13 @@ components:
       in: query
       required: false
       description: >
-        Желаемый размер страницы; сервер клампит к допустимому пределу.
+        Желаемый размер страницы; сервер клампит к допустимому пределу. Значение
+        должно укладываться в int32 (1..2147483647); выход за диапазон — 400.
       schema:
         type: integer
         format: int32
         minimum: 1
+        maximum: 2147483647
     PageTokenQuery:
       name: page_token
       in: query
