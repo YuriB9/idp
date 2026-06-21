@@ -4,26 +4,6 @@
  */
 
 export interface paths {
-    "/healthz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Liveness-проба периметра
-         * @description Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от доступности нижележащих сервисов (это readiness, не liveness).
-         */
-        get: operations["getHealth"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/projects/{project}/services": {
         parameters: {
             query?: never;
@@ -256,10 +236,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        HealthStatus: {
-            /** @enum {string} */
-            status: "ok";
-        };
         /**
          * @description Статус сервиса в каталоге (ADR-0004).
          * @enum {string}
@@ -418,26 +394,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    getHealth: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Сервис жив */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HealthStatus"];
-                };
-            };
-        };
-    };
     listServices: {
         parameters: {
             query?: {
