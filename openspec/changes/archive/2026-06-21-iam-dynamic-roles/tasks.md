@@ -57,4 +57,4 @@
 - [x] 9.1 README services/idm: что теперь можно создавать/удалять роли и права, защита системных ролей, какое право нужно (`read`/`write`/`manage`), широкая инвалидация кэша после структурной правки, проверка отказа/успеха, локальный seed (`make migrate-idm`)
 - [x] 9.2 Опубликовать ADR-0015 в `docs/adr/0015-iam-dynamic-catalog-manage-and-system-protection.md` (вне openspec/)
 - [x] 9.3 `GOWORK=off go mod tidy` в затронутых модулях при новых общих зависимостях; тесты (idm/gateway, -race), golangci-lint [errname/paralleltest], govulncheck, кодоген идемпотентен (proto+OpenAPI+TS+public). govulncheck/integration/conformance — в CI при недоступной локальной БД
-- [ ] 9.4 PR с зелёным CI (go test всех модулей, golangci-lint, govulncheck, gen:check, openapi-lint [Spectral], web-test [tsc+vitest], integration); после merge — отдельный PR sync+archive (`/opsx:archive`, образец #39/#37)
+- [x] 9.4 PR с зелёным CI (go test всех модулей, golangci-lint, govulncheck, gen:check, openapi-lint [Spectral], web-test [tsc+vitest], integration) — PR #46 смержен; sync+archive — этот PR
