@@ -64,4 +64,4 @@
 - [x] 10.1 README services/idm и корневой README: устройство справочника субъектов, нужный сервис-аккаунт, резолв `sub`→идентичность, требуемое право (`read, iam:directory`), поведение UI при недоступном Keycloak, проверка поиска/назначения, канонический ключ `sub` и сведение demo-user/dev
 - [x] 10.2 Опубликовать ADR-0016 в `docs/adr/0016-iam-subject-directory-from-oidc.md` (вне openspec/)
 - [x] 10.3 `GOWORK=off go mod tidy` в затронутых модулях при новых общих зависимостях; тесты (idm/gateway, -race), golangci-lint [errname/paralleltest], govulncheck, кодоген идемпотентен (proto+OpenAPI+TS+public). govulncheck/integration/conformance — в CI при недоступной локальной БД
-- [ ] 10.4 PR с зелёным CI (go test всех модулей, golangci-lint, govulncheck, gen:check, openapi-lint [Spectral], web-test [tsc+vitest], integration, conformance); merge → отдельный PR sync+archive (образец #46/#47)
+- [x] 10.4 PR с зелёным CI (go test всех модулей, golangci-lint, govulncheck, gen:check, openapi-lint [Spectral], web-test [tsc+vitest], integration, conformance); merge → отдельный PR sync+archive (образец #46/#47)
