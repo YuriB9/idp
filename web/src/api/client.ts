@@ -160,7 +160,7 @@ const endpoints = makeApi([
       {
         name: "page_size",
         type: "Query",
-        schema: z.number().int().gte(1).optional(),
+        schema: z.number().int().gte(1).lte(2147483647).optional(),
       },
       {
         name: "page_token",
@@ -292,7 +292,7 @@ const endpoints = makeApi([
       {
         name: "page_size",
         type: "Query",
-        schema: z.number().int().gte(1).optional(),
+        schema: z.number().int().gte(1).lte(2147483647).optional(),
       },
       {
         name: "page_token",
@@ -305,6 +305,11 @@ const endpoints = makeApi([
       {
         status: 400,
         description: `Некорректный запрос (валидация входных данных)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
         schema: z.object({ error: z.string() }).passthrough(),
       },
     ],
@@ -336,6 +341,11 @@ const endpoints = makeApi([
         schema: z.object({ error: z.string() }).passthrough(),
       },
       {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
+      {
         status: 409,
         description: `Конфликт состояния (например, имя сервиса уже занято)`,
         schema: z.object({ error: z.string() }).passthrough(),
@@ -363,6 +373,11 @@ const endpoints = makeApi([
     ],
     response: ServiceSummary,
     errors: [
+      {
+        status: 403,
+        description: `Доступ запрещён (RBAC, fail-closed)`,
+        schema: z.object({ error: z.string() }).passthrough(),
+      },
       {
         status: 404,
         description: `Ресурс не найден`,

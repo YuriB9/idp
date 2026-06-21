@@ -10,6 +10,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -223,11 +225,19 @@ func encodeSubjectCursor(subject string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(subject))
 }
 
-// decodeSubjectCursor разбирает непрозрачный курсор субъекта.
+// decodeSubjectCursor разбирает непрозрачный курсор субъекта. Декодированное
+// значение валидируется как корректная UTF-8-строка без NUL: subject уходит
+// текстовым параметром в SQL, а Postgres отвергает невалидный UTF-8/NUL ошибкой
+// уровня БД. Без этой проверки подделанный/битый курсор давал бы 500 вместо 400;
+// возвращаем повреждённый курсор как ошибку валидации (вызывающий маппит в 400).
 func decodeSubjectCursor(token string) (string, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
 		return "", fmt.Errorf("repository: не удалось декодировать курсор: %w", err)
 	}
-	return string(raw), nil
+	s := string(raw)
+	if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
+		return "", fmt.Errorf("repository: курсор содержит недопустимые байты")
+	}
+	return s, nil
 }
