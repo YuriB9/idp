@@ -8,20 +8,9 @@ info:
 servers:
   - url: /api
 paths:
-  /healthz:
-    get:
-      operationId: getHealth
-      summary: Liveness-проба периметра
-      description: >
-        Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от
-        доступности нижележащих сервисов (это readiness, не liveness).
-      responses:
-        "200":
-          description: Сервис жив
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthStatus"
+  # Операционные эндпоинты /healthz и /readyz сознательно НЕ описаны здесь: они
+  # живут в КОРНЕ сервиса (для k8s-проб, см. pkg/httpserver), а не под префиксом
+  # /api периметра. Контракт периметра (портал↔gateway) — только ресурсы под /api.
   /projects/{project}/services:
     get:
       operationId: listServices
@@ -460,13 +449,6 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
-    HealthStatus:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          enum: [ok]
     ServiceStatus:
       type: string
       description: Статус сервиса в каталоге (ADR-0004).

@@ -1,7 +1,6 @@
 import { makeApi, Zodios, type ZodiosOptions } from "@zodios/core";
 import { z } from "zod";
 
-const HealthStatus = z.object({ status: z.literal("ok") }).passthrough();
 const ServiceStatus = z.enum([
   "creating",
   "active",
@@ -60,7 +59,6 @@ const SubjectList = z
   .passthrough();
 
 export const schemas = {
-  HealthStatus,
   ServiceStatus,
   ServiceSummary,
   ServiceList,
@@ -80,15 +78,6 @@ export const schemas = {
 };
 
 const endpoints = makeApi([
-  {
-    method: "get",
-    path: "/healthz",
-    alias: "getHealth",
-    description: `Проверка живости периметра: возвращает 200 со статусом ok. Не зависит от доступности нижележащих сервисов (это readiness, не liveness).
-`,
-    requestFormat: "json",
-    response: HealthStatus,
-  },
   {
     method: "get",
     path: "/iam/permissions",
