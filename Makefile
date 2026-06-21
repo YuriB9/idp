@@ -71,7 +71,20 @@ test:
 ## AUTH_DISABLED=true + засеян demo-user. На старте охват — только GET-ручки
 ## (мутации create/owners/decommission/transfer/assign/revoke исключены, чтобы не
 ## трогать состояние и Temporal); /healthz исключён (живёт в корне, не под /api).
-## Запуск: make conformance [GATEWAY_BASE_URL=...] [CONF_EXAMPLES=N]
+##
+## CONF_CHECKS — НАБОР ПРОВЕРОК. По умолчанию — только «доки vs реальность»:
+## not_a_server_error (нет недокументированных 5xx), status_code_conformance
+## (код ответа описан), content_type_conformance и response_schema_conformance
+## (тело по схеме). Намеренно ИСКЛЮЧЕНЫ проверки строгости ввода/методов, которые
+## на нашем периметре дают лишь заведомо допустимый шум, не баги:
+##   - unsupported_method: chi отдаёт 405 без Allow на НЕстандартный метод (QUERY)
+##     — ограничение фреймворка для экзотических методов, реальные клиенты их не шлют;
+##   - positive_data_acceptance: непрозрачный курсор page_token (любая строка
+##     «валидна» по схеме, но чужой/битый курсор корректно отвергается 400);
+##   - negative_data_rejection: приём неизвестного query-параметра (штатное REST).
+## Полный набор: make conformance CONF_CHECKS=all
+## Запуск: make conformance [GATEWAY_BASE_URL=...] [CONF_EXAMPLES=N] [CONF_CHECKS=...]
+CONF_CHECKS ?= not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance
 conformance:
 	docker run --rm --network host \
 		-v "$(CURDIR)/openapi:/spec:ro" \
@@ -79,6 +92,7 @@ conformance:
 		--url "$(GATEWAY_BASE_URL)" \
 		--include-method GET \
 		--exclude-path /healthz \
+		--checks "$(CONF_CHECKS)" \
 		--max-examples=$(CONF_EXAMPLES)
 
 ## tidy: go mod tidy по всем модулям
