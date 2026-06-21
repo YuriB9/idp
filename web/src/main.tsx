@@ -5,10 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
+import { ThemeProvider, applyTheme, readInitialTheme } from "./lib/theme";
 import "./index.css";
 
-// По умолчанию — тёмная тема (единый визуальный язык платформы).
-document.documentElement.classList.add("dark");
+// Применяем сохранённую (или дефолтную тёмную) тему синхронно до первого рендера,
+// чтобы не было мигания темы (FOUC).
+applyTheme(readInitialTheme());
 
 // queryClient — единый клиент кэша запросов портала.
 const queryClient = new QueryClient({
@@ -27,10 +29,12 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>,
 );
