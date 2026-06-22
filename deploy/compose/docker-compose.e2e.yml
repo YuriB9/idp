@@ -1,0 +1,57 @@
+# Override-профиль для сквозных E2E через РЕАЛЬНЫЙ OIDC (ADR-0018).
+#
+# Базовая локалка (docker-compose.yml) ходит на gateway напрямую с
+# AUTH_DISABLED=true. Этот override НЕ ломает её, а доускоряет периметр до
+# реальной проверки JWT, чтобы прогонять 4 user stories через oauth2-proxy:
+#   - Keycloak дополнительно слушает https на 8443 с тест-сертификатом
+#     (см. `make e2e-certs`); KC_HOSTNAME фиксирует frontend-URL, поэтому iss
+#     токенов стабилен (http://keycloak:8080/realms/idp) независимо от того, с
+#     какого адреса запрошен токен;
+#   - gateway переключается на проверку JWT (AUTH_DISABLED снят): JWKS тянется по
+#     https с Keycloak, CA тест-сертификата добавляется в доверие через
+#     SSL_CERT_FILE; issuer/audience сверяются с токеном idp-portal;
+#   - oauth2-proxy принимает программный Bearer (skip_jwt_bearer_tokens), а не
+#     требует браузерную сессию.
+#
+# Запуск (см. Makefile цель e2e-up):
+#   docker compose -f deploy/compose/docker-compose.yml \
+#                  -f deploy/compose/docker-compose.e2e.yml up --build -d
+name: idp
+
+services:
+  keycloak:
+    # Включаем https-листенер 8443 с тест-сертификатом и фиксируем hostname,
+    # чтобы iss выпускаемых токенов был детерминированным.
+    environment:
+      KC_HTTPS_CERTIFICATE_FILE: /etc/idp-tls/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /etc/idp-tls/tls.key
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HOSTNAME_STRICT: "false"
+    volumes:
+      - ../tls:/etc/idp-tls:ro
+    ports:
+      - "8443:8443"
+
+  oauth2-proxy:
+    # Подменяем конфиг на E2E-вариант (skip_jwt_bearer_tokens=true), чтобы
+    # пропускать программный Bearer от password-grant без браузерной сессии.
+    command: ["--config=/etc/oauth2-proxy/oauth2-proxy.e2e.cfg"]
+    volumes:
+      - ../oauth2-proxy/oauth2-proxy.e2e.cfg:/etc/oauth2-proxy/oauth2-proxy.e2e.cfg:ro
+
+  gateway:
+    # Снимаем локальный обход аутентификации и включаем реальную проверку JWT.
+    # JWKS тянется по https с Keycloak; CA тест-сертификата кладём в доверие
+    # через SSL_CERT_FILE (в проде — публичные CA + https-адреса).
+    environment:
+      AUTH_DISABLED: "false"
+      JWKS_URL: "https://keycloak:8443/realms/idp/protocol/openid-connect/certs"
+      AUTH_ISSUER: "http://keycloak:8080/realms/idp"
+      AUTH_AUDIENCE: "idp-portal"
+      SSL_CERT_FILE: "/etc/idp-tls/ca.crt"
+    volumes:
+      - ../tls:/etc/idp-tls:ro
+    depends_on:
+      - keycloak
+      - idm
+      - projects

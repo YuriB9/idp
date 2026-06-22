@@ -106,3 +106,65 @@ tidy-check: tidy
 ## lint: golangci-lint по всем модулям (требует golangci-lint в PATH)
 lint:
 	@for m in $(MODULES); do echo ">> lint $$m"; (cd $$m && golangci-lint run ./...) || exit 1; done
+
+# === Сквозные E2E через периметр (ADR-0018) ===
+# Прогон ТОЛЬКО локальный, ручной: в CI стенд не поднимается. Цели поднимают
+# docker-compose-стенд с реальным OIDC (Keycloak + Oauth2-Proxy) и гоняют набор
+# tests/e2e (build-тег integration). Готовность стенда ждёт сам набор (TestMain),
+# изоляция — уникальные имена сервисов, очистка — `docker compose down -v`.
+COMPOSE_E2E := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.e2e.yml
+E2E_TLS_DIR := $(CURDIR)/deploy/tls
+# База периметра для E2E — через oauth2-proxy (:4180), префикс /api добавляет набор.
+E2E_PROXY_URL ?= http://localhost:4180
+# База Keycloak для получения токена (password-grant idp-portal).
+E2E_KEYCLOAK_URL ?= http://localhost:8088
+# Бюджет ожидания переходов статусов воркфлоу (ретраи-поллинг, не sleep).
+E2E_STATUS_TIMEOUT ?= 120s
+
+.PHONY: e2e-certs e2e-up e2e-test e2e-down e2e e2e-logs
+
+## e2e-certs: сгенерировать тест-сертификаты (CA + server cert SAN=keycloak) для
+## https-листенера Keycloak и доверия gateway. Идемпотентно: повторно не
+## перегенерирует. Файлы не коммитятся (см. .gitignore).
+e2e-certs:
+	@mkdir -p $(E2E_TLS_DIR)
+	@if [ ! -f $(E2E_TLS_DIR)/tls.crt ]; then \
+		echo ">> генерация тест-сертификатов E2E в $(E2E_TLS_DIR)"; \
+		openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+			-keyout $(E2E_TLS_DIR)/ca.key -out $(E2E_TLS_DIR)/ca.crt \
+			-subj "/CN=idp-e2e-ca" 2>/dev/null; \
+		openssl req -newkey rsa:2048 -nodes \
+			-keyout $(E2E_TLS_DIR)/tls.key -out $(E2E_TLS_DIR)/tls.csr \
+			-subj "/CN=keycloak" 2>/dev/null; \
+		printf "subjectAltName=DNS:keycloak\n" > $(E2E_TLS_DIR)/ext.cnf; \
+		openssl x509 -req -in $(E2E_TLS_DIR)/tls.csr \
+			-CA $(E2E_TLS_DIR)/ca.crt -CAkey $(E2E_TLS_DIR)/ca.key -CAcreateserial \
+			-out $(E2E_TLS_DIR)/tls.crt -days 3650 \
+			-extfile $(E2E_TLS_DIR)/ext.cnf 2>/dev/null; \
+		chmod 0644 $(E2E_TLS_DIR)/ca.crt $(E2E_TLS_DIR)/tls.crt $(E2E_TLS_DIR)/tls.key; \
+	fi
+
+## e2e-up: поднять E2E-стенд (реальный OIDC) в фоне. Готовность ждёт e2e-test.
+e2e-up: e2e-certs
+	$(COMPOSE_E2E) up --build -d
+
+## e2e-test: прогнать сквозной набор против поднятого E2E-стенда.
+e2e-test:
+	cd tests/e2e && \
+		E2E_PROXY_URL="$(E2E_PROXY_URL)" \
+		E2E_KEYCLOAK_URL="$(E2E_KEYCLOAK_URL)" \
+		E2E_STATUS_TIMEOUT="$(E2E_STATUS_TIMEOUT)" \
+		go test -tags=integration -count=1 -v ./...
+
+## e2e-down: остановить E2E-стенд и очистить тома.
+e2e-down:
+	$(COMPOSE_E2E) down -v
+
+## e2e: полный локальный цикл — поднять стенд, прогнать набор, гарантированно
+## погасить стенд (очистка выполняется даже при падении тестов).
+e2e: e2e-up
+	@$(MAKE) e2e-test; rc=$$?; $(MAKE) e2e-down; exit $$rc
+
+## e2e-logs: собрать логи E2E-стенда (диагностика при падении набора).
+e2e-logs:
+	$(COMPOSE_E2E) logs --no-color

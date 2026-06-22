@@ -1,0 +1,13 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "PUT", "urlPathPattern": "/v1/sys/policies/acl/[^/]*sagafail[^/]*" },
+      "response": {
+        "status": 400,
+        "jsonBody": { "errors": ["mock: смоделированный неустранимый сбой Vault для сценария Saga-отката"] },
+        "headers": { "Content-Type": "application/json" }
+      },
+      "priority": 1
+    }
+  ]
+}
