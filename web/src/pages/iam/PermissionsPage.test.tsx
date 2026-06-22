@@ -80,6 +80,99 @@ describe("PermissionsPage", () => {
     expect(createPermission).toHaveBeenCalledWith({ action: "deploy", resource: "project:demo" });
   });
 
+  it("подсказки действий/ресурсов: значения каталога видны в datalist", async () => {
+    listPermissions.mockResolvedValue({
+      permissions: [
+        { action: "read", resource: "iam:global", system: true },
+        { action: "deploy", resource: "project:demo", system: false },
+      ],
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /Создать право/i }));
+    await screen.findByLabelText(/Действие/i);
+
+    // datalist наполнен РАЗЛИЧНЫМИ значениями из каталога.
+    const actionOptions = document.querySelectorAll("#perm-action-options option");
+    const resourceOptions = document.querySelectorAll("#perm-resource-options option");
+    expect([...actionOptions].map((o) => o.getAttribute("value"))).toEqual(["deploy", "read"]);
+    expect([...resourceOptions].map((o) => o.getAttribute("value"))).toEqual([
+      "iam:global",
+      "project:demo",
+    ]);
+  });
+
+  it("создание права НОВЫМ значением (нет в подсказках) → createPermission", async () => {
+    listPermissions.mockResolvedValue({
+      permissions: [{ action: "read", resource: "iam:global", system: true }],
+    });
+    createPermission.mockResolvedValue({ action: "scale", resource: "project:new", system: false });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /Создать право/i }));
+    await user.type(await screen.findByLabelText(/Действие/i), "scale");
+    await user.type(screen.getByLabelText(/Ресурс/i), "project:new");
+    await user.click(screen.getByRole("button", { name: /^Создать$/ }));
+
+    await waitFor(() => expect(createPermission).toHaveBeenCalledTimes(1));
+    expect(createPermission).toHaveBeenCalledWith({ action: "scale", resource: "project:new" });
+  });
+
+  it("фильтр каталога: поиск по подстроке сужает таблицу", async () => {
+    listPermissions.mockResolvedValue({
+      permissions: [
+        { action: "read", resource: "iam:global", system: true },
+        { action: "deploy", resource: "project:demo", system: false },
+      ],
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(/deploy @ project:demo/i);
+    await user.type(screen.getByLabelText(/Поиск по каталогу прав/i), "deploy");
+
+    expect(screen.getByText(/deploy @ project:demo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/read @ iam:global/i)).not.toBeInTheDocument();
+  });
+
+  it("фильтр по типу: только пользовательские права", async () => {
+    listPermissions.mockResolvedValue({
+      permissions: [
+        { action: "read", resource: "iam:global", system: true },
+        { action: "deploy", resource: "project:demo", system: false },
+      ],
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(/read @ iam:global/i);
+    await user.selectOptions(screen.getByLabelText(/Фильтр по типу права/i), "user");
+
+    expect(screen.getByText(/deploy @ project:demo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/read @ iam:global/i)).not.toBeInTheDocument();
+  });
+
+  it("пустой результат фильтра → empty-state «ничего не найдено»", async () => {
+    listPermissions.mockResolvedValue({
+      permissions: [{ action: "deploy", resource: "project:demo", system: false }],
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(/deploy @ project:demo/i);
+    await user.type(screen.getByLabelText(/Поиск по каталогу прав/i), "zzz-no-match");
+
+    expect(await screen.findByText(/Ничего не найдено/i)).toBeInTheDocument();
+    expect(screen.queryByText(/deploy @ project:demo/i)).not.toBeInTheDocument();
+  });
+
   it("удаление пользовательского права → deletePermission; системное read-only", async () => {
     listPermissions.mockResolvedValue({
       permissions: [
