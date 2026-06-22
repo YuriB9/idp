@@ -3,7 +3,17 @@
 // дизайн-системы (ADR-0017). Маршруты и разделы сохранены; на узких экранах меню
 // открывается off-canvas.
 import { useState } from "react";
-import { Boxes, FileCode2, Layers, Menu, ServerCog, ShieldCheck } from "lucide-react";
+import {
+  Boxes,
+  FileCode2,
+  KeyRound,
+  Layers,
+  Menu,
+  ServerCog,
+  ShieldCheck,
+  UserCog,
+  Users,
+} from "lucide-react";
 import { Outlet, useParams } from "react-router-dom";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -22,7 +32,17 @@ export function GlobalLayout() {
       label: "Платформа",
       items: [
         { label: "Сервисы", to: `/projects/${project}/services`, icon: Layers, end: true },
-        { label: "Роли и доступы", to: "/iam", icon: ShieldCheck },
+        // «Роли и доступы» — раскрывающееся подменю с тремя под-разделами (ADR-0017).
+        {
+          label: "Роли и доступы",
+          to: "/iam",
+          icon: ShieldCheck,
+          children: [
+            { label: "Роли", to: "/iam/roles", icon: KeyRound },
+            { label: "Права", to: "/iam/permissions", icon: UserCog },
+            { label: "Пользователи", to: "/iam/users", icon: Users },
+          ],
+        },
         { label: "API (Swagger)", to: "/swagger.html", icon: FileCode2, external: true },
       ],
     },
