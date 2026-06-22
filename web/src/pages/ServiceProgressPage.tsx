@@ -8,6 +8,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide
 
 import { apiClient } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { OwnersCard } from "@/components/OwnersCard";
 import { DecommissionCard } from "@/components/DecommissionCard";
@@ -52,16 +53,14 @@ export function ServiceProgressPage() {
         К списку сервисов
       </Link>
 
+      <PageHeader
+        title={name}
+        description={`Проект «${project}»`}
+        actions={status ? <StatusBadge status={status} /> : undefined}
+      />
+
       <Card>
         <CardContent className="flex flex-col gap-5 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-lg font-semibold">{name}</h1>
-              <p className="text-sm text-muted-foreground">Проект «{project}»</p>
-            </div>
-            {status && <StatusBadge status={status} />}
-          </div>
-
           <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
             {query.isLoading && (
               <span className="flex items-center gap-2 text-muted-foreground">

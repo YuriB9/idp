@@ -1,26 +1,19 @@
 // Карточка вывода сервиса из эксплуатации (soft delete / decommission). Действие
-// необратимо для доступа (отзыв GitLab/Harbor/Vault), поэтому требует явного
-// подтверждения: ввод имени сервиса и отметку о снятой нагрузке из K8s
-// (load_drained — предусловие, ADR-0012). Доступно только для активного сервиса;
-// для прочих статусов действие заблокировано. Обрабатываем 403 (нет права), 409
-// (конкурентный конфликт) и 422 (предусловие не выполнено) понятными сообщениями
-// без раскрытия внутренних деталей сервера.
+// необратимо для доступа (отзыв GitLab/Harbor/Vault), поэтому выполняется через
+// ConfirmDialog (ADR-0017) с явным подтверждением: ввод имени сервиса и отметка
+// снятой нагрузки из K8s (load_drained — предусловие, ADR-0012). Доступно только
+// для активного сервиса; для прочих статусов действие заблокировано. Результат —
+// через тосты (единый маппинг кодов 403/409/422), без раскрытия внутренних деталей.
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, PowerOff } from "lucide-react";
+import { PowerOff } from "lucide-react";
 
 import { apiClient } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
-
-// httpStatusOf аккуратно достаёт HTTP-статус из ошибки zodios/axios.
-function httpStatusOf(err: unknown): number | undefined {
-  if (typeof err === "object" && err !== null && "response" in err) {
-    return (err as { response?: { status?: number } }).response?.status;
-  }
-  return undefined;
-}
+import { useToast } from "@/components/ui/toast";
 
 type Props = {
   project: string;
@@ -30,9 +23,10 @@ type Props = {
 
 export function DecommissionCard({ project, name, status }: Props) {
   const queryClient = useQueryClient();
-  const [serverError, setServerError] = useState<string | null>(null);
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
   // confirmName — введённое имя для подтверждения; loadDrained — отметка снятой
-  // нагрузки (предусловие). Кнопка активна только при совпадении имени и отметке.
+  // нагрузки (предусловие). Подтверждение доступно только при их выполнении.
   const [confirmName, setConfirmName] = useState("");
   const [loadDrained, setLoadDrained] = useState(false);
 
@@ -46,29 +40,25 @@ export function DecommissionCard({ project, name, status }: Props) {
         { params: { project, name } },
       ),
     onSuccess: () => {
-      setServerError(null);
+      toast.success("Сервис выведен из эксплуатации.");
+      setOpen(false);
+      setConfirmName("");
+      setLoadDrained(false);
       void queryClient.invalidateQueries({ queryKey: ["service", project, name] });
     },
-    onError: (err) => {
-      const code = httpStatusOf(err);
-      if (code === 403) {
-        setServerError("Недостаточно прав для вывода сервиса из эксплуатации.");
-      } else if (code === 409) {
-        setServerError(
-          "Статус сервиса изменился в другом месте. Обновите страницу и повторите.",
-        );
-      } else if (code === 422) {
-        setServerError(
-          "Предусловие не выполнено: убедитесь, что нагрузка снята из K8s.",
-        );
-      } else {
-        setServerError("Не удалось вывести сервис из эксплуатации. Повторите попытку.");
-      }
-    },
+    onError: (err) =>
+      toast.error(err, {
+        action: "вывести сервис из эксплуатации",
+        overrides: {
+          403: "Недостаточно прав для вывода сервиса из эксплуатации.",
+          409: "Статус сервиса изменился в другом месте. Обновите страницу и повторите.",
+          422: "Предусловие не выполнено: убедитесь, что нагрузка снята из K8s.",
+        },
+      }),
   });
 
-  // canSubmit — подтверждение корректно: точное совпадение имени и отметка нагрузки.
-  const canSubmit = isActive && confirmName === name && loadDrained && !mutation.isPending;
+  // canConfirm — подтверждение корректно: точное совпадение имени и отметка нагрузки.
+  const canConfirm = confirmName === name && loadDrained;
 
   return (
     <Card>
@@ -93,49 +83,42 @@ export function DecommissionCard({ project, name, status }: Props) {
               Это <strong>вывод из эксплуатации</strong> (soft delete), а не
               удаление данных: запись каталога сохранится, но доступ во внешних
               системах (GitLab, Harbor, Vault) будет <strong>необратимо</strong>{" "}
-              отозван. Чтобы подтвердить, введите имя сервиса.
+              отозван.
             </p>
-
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={loadDrained}
-                onChange={(e) => setLoadDrained(e.target.checked)}
-              />
-              Нагрузка сервиса снята из K8s
-            </label>
-
-            <label htmlFor="confirmName" className="text-sm font-medium">
-              Имя сервиса для подтверждения
-            </label>
-            <Input
-              id="confirmName"
-              value={confirmName}
-              placeholder={name}
-              onChange={(e) => setConfirmName(e.target.value)}
-            />
-
-            {serverError && (
-              <p className="flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                <AlertTriangle className="size-4 shrink-0" />
-                {serverError}
-              </p>
-            )}
-
             <div className="flex justify-end">
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={!canSubmit}
-                onClick={() => {
-                  setServerError(null);
-                  mutation.mutate();
-                }}
-              >
-                {mutation.isPending && <Loader2 className="size-4 animate-spin" />}
-                {mutation.isPending ? "Выводим…" : "Вывести из эксплуатации"}
+              <Button type="button" variant="destructive" onClick={() => setOpen(true)}>
+                Вывести из эксплуатации
               </Button>
             </div>
+
+            <ConfirmDialog
+              open={open}
+              onClose={() => setOpen(false)}
+              onConfirm={() => mutation.mutate()}
+              title="Вывести сервис из эксплуатации?"
+              description="Доступ во внешних системах будет необратимо отозван. Подтвердите снятие нагрузки и введите имя сервиса."
+              confirmLabel="Вывести"
+              confirmDisabled={!canConfirm}
+              pending={mutation.isPending}
+            >
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={loadDrained}
+                  onChange={(e) => setLoadDrained(e.target.checked)}
+                />
+                Нагрузка сервиса снята из K8s
+              </label>
+              <label htmlFor="confirmName" className="text-sm font-medium">
+                Имя сервиса для подтверждения
+              </label>
+              <Input
+                id="confirmName"
+                value={confirmName}
+                placeholder={name}
+                onChange={(e) => setConfirmName(e.target.value)}
+              />
+            </ConfirmDialog>
           </>
         )}
       </CardContent>

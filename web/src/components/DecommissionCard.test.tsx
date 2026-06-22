@@ -1,12 +1,14 @@
-// Тесты карточки вывода из эксплуатации: happy-path (load_drained уходит в
-// периметр после подтверждения именем), предусловие (422), конфликт (409), отказ
-// доступа (403), блокировка для неактивного/уже выведенного сервиса.
+// Тесты карточки вывода из эксплуатации (ADR-0017): действие выполняется через
+// ConfirmDialog (открыть → отметка нагрузки + ввод имени → подтвердить), результат
+// и ошибки (422/409/403) — через тосты; блокировка для неактивного/уже выведенного
+// сервиса.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { DecommissionCard } from "./DecommissionCard";
+import { ToastProvider } from "./ui/toast";
 
 // Мокаем клиент периметра, сохраняя реальные zod-схемы.
 const { decommissionService } = vi.hoisted(() => ({ decommissionService: vi.fn() }));
@@ -19,15 +21,19 @@ function renderCard(status = "active") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <DecommissionCard project="demo" name="svc" status={status} />
+      <ToastProvider>
+        <DecommissionCard project="demo" name="svc" status={status} />
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }
 
-// confirm заполняет подтверждение (отметка нагрузки + точное имя сервиса).
-async function confirm(user: ReturnType<typeof userEvent.setup>) {
+// openAndConfirm открывает модалку, заполняет подтверждение и нажимает «Вывести».
+async function openAndConfirm(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
   await user.click(screen.getByRole("checkbox"));
   await user.type(screen.getByLabelText(/Имя сервиса для подтверждения/i), "svc");
+  await user.click(screen.getByRole("button", { name: /^Вывести$/i }));
 }
 
 describe("DecommissionCard", () => {
@@ -38,7 +44,9 @@ describe("DecommissionCard", () => {
   it("блокирует действие для уже выведенного сервиса", () => {
     renderCard("decommissioned");
     expect(screen.getByText(/уже выведен из эксплуатации/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Вывести из эксплуатации/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Вывести из эксплуатации/i }),
+    ).toBeNull();
   });
 
   it("блокирует действие для неактивного сервиса (creating)", () => {
@@ -46,56 +54,55 @@ describe("DecommissionCard", () => {
     expect(screen.getByText(/доступен только для активного/i)).toBeInTheDocument();
   });
 
-  it("кнопка неактивна без подтверждения именем", () => {
+  it("в модалке подтверждение неактивно без имени и отметки нагрузки", async () => {
+    const user = userEvent.setup();
     renderCard();
-    expect(screen.getByRole("button", { name: /Вывести из эксплуатации/i })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
+    expect(screen.getByRole("button", { name: /^Вывести$/i })).toBeDisabled();
   });
 
   it("happy-path: load_drained уходит в периметр после подтверждения", async () => {
-    decommissionService.mockResolvedValue({ service: { project: "demo", name: "svc", status: "decommissioned", owners: [], owners_version: 0 } });
+    decommissionService.mockResolvedValue({
+      project: "demo",
+      name: "svc",
+      status: "decommissioned",
+      owners: [],
+      owners_version: 0,
+    });
     const user = userEvent.setup();
     renderCard();
 
-    await confirm(user);
-    await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
+    await openAndConfirm(user);
 
     await waitFor(() => expect(decommissionService).toHaveBeenCalledTimes(1));
     expect(decommissionService).toHaveBeenCalledWith(
       { load_drained: true },
       { params: { project: "demo", name: "svc" } },
     );
+    expect(await screen.findByRole("status")).toHaveTextContent(/выведен из эксплуатации/i);
   });
 
-  it("предусловие не выполнено (422) → понятное сообщение", async () => {
+  it("предусловие не выполнено (422) → тост с понятным сообщением", async () => {
     decommissionService.mockRejectedValue({ response: { status: 422 } });
     const user = userEvent.setup();
     renderCard();
-
-    await confirm(user);
-    await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
-
-    expect(await screen.findByText(/нагрузка снята из K8s/i)).toBeInTheDocument();
+    await openAndConfirm(user);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/нагрузка снята из K8s/i);
   });
 
-  it("конкурентный конфликт (409) → понятное сообщение", async () => {
+  it("конкурентный конфликт (409) → тост с понятным сообщением", async () => {
     decommissionService.mockRejectedValue({ response: { status: 409 } });
     const user = userEvent.setup();
     renderCard();
-
-    await confirm(user);
-    await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
-
-    expect(await screen.findByText(/изменился в другом месте/i)).toBeInTheDocument();
+    await openAndConfirm(user);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/изменился в другом месте/i);
   });
 
-  it("отказ доступа (403) → понятное сообщение", async () => {
+  it("отказ доступа (403) → тост с понятным сообщением", async () => {
     decommissionService.mockRejectedValue({ response: { status: 403 } });
     const user = userEvent.setup();
     renderCard();
-
-    await confirm(user);
-    await user.click(screen.getByRole("button", { name: /Вывести из эксплуатации/i }));
-
-    expect(await screen.findByText(/Недостаточно прав/i)).toBeInTheDocument();
+    await openAndConfirm(user);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Недостаточно прав/i);
   });
 });

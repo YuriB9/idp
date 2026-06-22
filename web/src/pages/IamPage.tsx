@@ -1,11 +1,12 @@
-// Раздел «Роли и доступы» (IAM-админка, ADR-0014/0015). Горизонтальный маршрут (не
-// project-scoped): просмотр ролей и их прав, управление назначением ролей субъектам
+// Раздел «Роли и доступы» (IAM-админка, ADR-0014/0015/0016) в подаче дизайн-системы
+// (ADR-0017). Просмотр ролей и их прав, управление назначением ролей субъектам
 // (write) и СТРУКТУРНОЕ управление каталогом (manage) — создание/удаление ролей и
 // прав, правка набора прав роли (attach/detach). Системные (сидированные) роли/права
-// помечены бейджем «системная» и доступны только для чтения (кнопки удаления/правки
-// скрыты). Все данные идут через периметр с рантайм-валидацией ответов zod; отказ
-// доступа (403) скрывает содержимое (fail-closed на UI), внутренние ошибки клиенту
-// не раскрываются.
+// помечены и доступны только для чтения. Все данные идут через периметр с рантайм-
+// валидацией ответов zod; отказ доступа (403) скрывает содержимое (fail-closed на
+// UI), внутренние ошибки клиенту не раскрываются. Подача: PageHeader, таблицы
+// (DataTable), действия — модалки/ConfirmDialog, результаты — тосты. Пикер
+// пользователя из справочника Keycloak и обработка 403/503/«осиротевших» сохранены.
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,17 +33,30 @@ import { apiClient } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { DataTable, type ColumnDef } from "@/components/ui/data-table";
+import { Dialog } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PageHeader } from "@/components/PageHeader";
+import { useToast } from "@/components/ui/toast";
+import { httpStatusOf } from "@/lib/errors";
 
-// httpStatusOf аккуратно достаёт HTTP-статус из ошибки zodios/axios.
-function httpStatusOf(err: unknown): number | undefined {
-  if (typeof err === "object" && err !== null && "response" in err) {
-    return (err as { response?: { status?: number } }).response?.status;
-  }
-  return undefined;
-}
+// Единый маппинг кодов для действий назначения/снятия роли (write на iam:global).
+const ASSIGN_OVERRIDES: Record<number, string> = {
+  403: "Недостаточно прав для управления ролями (нужно право write на iam:global).",
+  404: "Роль не найдена.",
+  400: "Некорректные данные запроса.",
+};
+
+// Единый маппинг кодов для структурных мутаций каталога (manage на iam:global).
+const CATALOG_OVERRIDES: Record<number, string> = {
+  403: "Недостаточно прав для изменения каталога (нужно право manage на iam:global).",
+  404: "Роль или право не найдены.",
+  409: "Такая роль или право уже существуют.",
+  422: "Системные роли и права защищены от изменения.",
+  400: "Некорректные данные запроса.",
+};
 
 // assignFormSchema — валидация ввода формы назначения роли (subject + role).
-// subject заполняется выбором пользователя из справочника (пикер).
 const assignFormSchema = z.object({
   subject: z.string().min(1, "Выберите пользователя"),
   role: z.string().min(1, "Выберите роль"),
@@ -60,10 +74,18 @@ const createPermissionSchema = z.object({
 });
 type CreatePermissionValues = z.infer<typeof createPermissionSchema>;
 
+// ConfirmState — единое состояние подтверждения деструктивного действия.
+type ConfirmState =
+  | { kind: "delete-role"; role: string }
+  | { kind: "delete-permission"; action: string; resource: string }
+  | { kind: "detach"; role: string; action: string; resource: string }
+  | { kind: "revoke"; subject: string; role: string }
+  | null;
+
 export function IamPage() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [attachPerm, setAttachPerm] = useState<string>("");
   // Поиск пользователя в каталоге (пикер назначения роли, ADR-0016). Debounce,
   // чтобы не дёргать справочник на каждый символ.
@@ -71,6 +93,10 @@ export function IamPage() {
   const debouncedSearch = useDebounced(subjectSearch, 300);
   // Выбранный в пикере пользователь (для отображения; ключ — в поле формы subject).
   const [picked, setPicked] = useState<{ label: string; email: string } | null>(null);
+  // Открытые модалки создания и состояние подтверждения деструктивного действия.
+  const [createRoleOpen, setCreateRoleOpen] = useState(false);
+  const [createPermOpen, setCreatePermOpen] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
 
   // Каталог ролей. Ошибка 403 здесь означает отсутствие права на админку —
   // содержимое раздела не показываем (fail-closed на UI).
@@ -150,65 +176,73 @@ export function IamPage() {
     mutationFn: (values: AssignFormValues) =>
       apiClient.assignRole(undefined, { params: { subject: values.subject, role: values.role } }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Роль назначена.");
       reset();
       setPicked(null);
       void invalidateSubjects();
     },
-    onError: (err) => setActionError(mutationMessage(err, "назначить")),
+    onError: (err) =>
+      toast.error(err, { action: "назначить роль", overrides: ASSIGN_OVERRIDES }),
   });
 
   const revokeMutation = useMutation({
     mutationFn: (vars: { subject: string; role: string }) =>
       apiClient.revokeRole(undefined, { params: { subject: vars.subject, role: vars.role } }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Роль снята.");
       void invalidateSubjects();
     },
-    onError: (err) => setActionError(mutationMessage(err, "снять")),
+    onError: (err) =>
+      toast.error(err, { action: "снять роль", overrides: ASSIGN_OVERRIDES }),
   });
 
   const createRoleMutation = useMutation({
     mutationFn: (values: CreateRoleValues) => apiClient.createRole({ name: values.name }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Роль создана.");
       createRoleForm.reset();
+      setCreateRoleOpen(false);
       void invalidateRoles();
     },
-    onError: (err) => setActionError(catalogMessage(err, "создать роль")),
+    onError: (err) =>
+      toast.error(err, { action: "создать роль", overrides: CATALOG_OVERRIDES }),
   });
 
   const deleteRoleMutation = useMutation({
     mutationFn: (role: string) => apiClient.deleteRole(undefined, { params: { role } }),
     onSuccess: (_data, role) => {
-      setActionError(null);
+      toast.success("Роль удалена.");
       if (selectedRole === role) setSelectedRole(null);
       void invalidateRoles();
       void invalidateSubjects();
     },
-    onError: (err) => setActionError(catalogMessage(err, "удалить роль")),
+    onError: (err) =>
+      toast.error(err, { action: "удалить роль", overrides: CATALOG_OVERRIDES }),
   });
 
   const createPermMutation = useMutation({
     mutationFn: (values: CreatePermissionValues) =>
       apiClient.createPermission({ action: values.action, resource: values.resource }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Право создано.");
       createPermForm.reset();
+      setCreatePermOpen(false);
       void invalidatePermissions();
     },
-    onError: (err) => setActionError(catalogMessage(err, "создать право")),
+    onError: (err) =>
+      toast.error(err, { action: "создать право", overrides: CATALOG_OVERRIDES }),
   });
 
   const deletePermMutation = useMutation({
     mutationFn: (vars: { action: string; resource: string }) =>
       apiClient.deletePermission(undefined, { queries: vars }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Право удалено.");
       void invalidatePermissions();
       void invalidateRolePerms();
     },
-    onError: (err) => setActionError(catalogMessage(err, "удалить право")),
+    onError: (err) =>
+      toast.error(err, { action: "удалить право", overrides: CATALOG_OVERRIDES }),
   });
 
   const attachMutation = useMutation({
@@ -218,11 +252,12 @@ export function IamPage() {
         { params: { role: vars.role } },
       ),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Право прикреплено.");
       setAttachPerm("");
       void invalidateRolePerms();
     },
-    onError: (err) => setActionError(catalogMessage(err, "прикрепить право")),
+    onError: (err) =>
+      toast.error(err, { action: "прикрепить право", overrides: CATALOG_OVERRIDES }),
   });
 
   const detachMutation = useMutation({
@@ -232,10 +267,11 @@ export function IamPage() {
         queries: { action: vars.action, resource: vars.resource },
       }),
     onSuccess: () => {
-      setActionError(null);
+      toast.success("Право откреплено.");
       void invalidateRolePerms();
     },
-    onError: (err) => setActionError(catalogMessage(err, "открепить право")),
+    onError: (err) =>
+      toast.error(err, { action: "открепить право", overrides: CATALOG_OVERRIDES }),
   });
 
   // 403 на загрузке каталога — нет права на админку: показываем отказ, без содержимого.
@@ -257,22 +293,111 @@ export function IamPage() {
   const selectedRoleObj = roles.find((r) => r.name === selectedRole) ?? null;
   const selectedRoleIsSystem = selectedRoleObj?.system ?? false;
 
+  // Колонки каталога прав (DataTable).
+  type PermRow = (typeof permissions)[number];
+  const permColumns: ColumnDef<PermRow>[] = [
+    {
+      id: "perm",
+      header: "Право",
+      sortValue: (p) => `${p.action} ${p.resource}`,
+      cell: (p) => (
+        <span className="font-mono text-xs">
+          {p.action} @ {p.resource}
+        </span>
+      ),
+    },
+    {
+      id: "type",
+      header: "Тип",
+      cell: (p) =>
+        p.system ? (
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="size-3" /> системное
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">пользовательское</span>
+        ),
+    },
+    {
+      id: "actions",
+      header: "",
+      align: "right",
+      cell: (p) =>
+        p.system ? null : (
+          <button
+            type="button"
+            aria-label={`Удалить право ${p.action} ${p.resource}`}
+            className="text-muted-foreground transition-colors hover:text-destructive"
+            onClick={() =>
+              setConfirm({ kind: "delete-permission", action: p.action, resource: p.resource })
+            }
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        ),
+    },
+  ];
+
+  // Колонки списка субъектов с ролями (DataTable).
+  type SubjectRow = (typeof subjects)[number];
+  const subjectColumns: ColumnDef<SubjectRow>[] = [
+    {
+      id: "user",
+      header: "Пользователь",
+      cell: (s) =>
+        s.identity && s.identity.found ? (
+          <span className="flex flex-col">
+            <span className="font-medium">
+              {s.identity.display_name || s.identity.username || s.subject}
+            </span>
+            {s.identity.email && (
+              <span className="text-xs text-muted-foreground">{s.identity.email}</span>
+            )}
+            <span className="font-mono text-xs text-muted-foreground">{s.subject}</span>
+          </span>
+        ) : (
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-sm">{s.subject}</span>
+            {s.identity && !s.identity.found && (
+              <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                <AlertTriangle className="size-3" /> нет в каталоге
+              </span>
+            )}
+          </span>
+        ),
+    },
+    {
+      id: "roles",
+      header: "Роли",
+      cell: (s) => (
+        <div className="flex flex-wrap gap-2">
+          {s.roles.map((role) => (
+            <span
+              key={role}
+              className="flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
+            >
+              {role}
+              <button
+                type="button"
+                aria-label={`Снять роль ${role} с ${s.subject}`}
+                className="text-muted-foreground transition-colors hover:text-destructive"
+                onClick={() => setConfirm({ kind: "revoke", subject: s.subject, role })}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ),
+    },
+  ];
+
   return (
     <section className="flex flex-col gap-5">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Роли и доступы</h1>
-        <p className="text-sm text-muted-foreground">
-          Просмотр и управление каталогом ролей/прав и назначением ролей субъектам
-          (IAM-админка)
-        </p>
-      </div>
-
-      {actionError && (
-        <p className="flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertTriangle className="size-4 shrink-0" />
-          {actionError}
-        </p>
-      )}
+      <PageHeader
+        title="Роли и доступы"
+        description="Просмотр и управление каталогом ролей/прав и назначением ролей субъектам (IAM-админка)"
+      />
 
       {/* Роли и их права */}
       <Card>
@@ -290,7 +415,7 @@ export function IamPage() {
           {rolesQuery.isError && httpStatusOf(rolesQuery.error) !== 403 && (
             <p className="text-sm text-destructive">Не удалось загрузить роли.</p>
           )}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {roles.map((r) => (
               <span
                 key={r.name}
@@ -316,47 +441,17 @@ export function IamPage() {
                     type="button"
                     aria-label={`Удалить роль ${r.name}`}
                     className="text-muted-foreground transition-colors hover:text-destructive"
-                    disabled={deleteRoleMutation.isPending}
-                    onClick={() => {
-                      setActionError(null);
-                      deleteRoleMutation.mutate(r.name);
-                    }}
+                    onClick={() => setConfirm({ kind: "delete-role", role: r.name })}
                   >
                     <Trash2 className="size-3.5" />
                   </button>
                 )}
               </span>
             ))}
-          </div>
-
-          {/* Форма создания роли */}
-          <form
-            className="flex items-end gap-2"
-            onSubmit={createRoleForm.handleSubmit((values) => {
-              setActionError(null);
-              createRoleMutation.mutate(values);
-            })}
-          >
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="new-role" className="text-sm font-medium">
-                Новая роль
-              </label>
-              <Input
-                id="new-role"
-                placeholder="например, reviewers"
-                aria-invalid={Boolean(createRoleForm.formState.errors.name)}
-                {...createRoleForm.register("name")}
-              />
-            </div>
-            <Button type="submit" variant="outline" disabled={createRoleMutation.isPending}>
-              <Plus className="size-4" /> Создать
+            <Button type="button" variant="outline" size="sm" onClick={() => setCreateRoleOpen(true)}>
+              <Plus className="size-4" /> Создать роль
             </Button>
-          </form>
-          {createRoleForm.formState.errors.name && (
-            <p className="text-sm text-destructive">
-              {createRoleForm.formState.errors.name.message}
-            </p>
-          )}
+          </div>
 
           {selectedRole !== null && (
             <div className="rounded-md border border-border p-3">
@@ -396,15 +491,14 @@ export function IamPage() {
                           type="button"
                           aria-label={`Открепить право ${p.action} ${p.resource}`}
                           className="text-muted-foreground transition-colors hover:text-destructive"
-                          disabled={detachMutation.isPending}
-                          onClick={() => {
-                            setActionError(null);
-                            detachMutation.mutate({
+                          onClick={() =>
+                            setConfirm({
+                              kind: "detach",
                               role: selectedRole,
                               action: p.action,
                               resource: p.resource,
-                            });
-                          }}
+                            })
+                          }
                         >
                           <Trash2 className="size-3.5" />
                         </button>
@@ -431,7 +525,7 @@ export function IamPage() {
                       {permissions.map((p) => (
                         <option
                           key={`${p.action}:${p.resource}`}
-                          value={`${p.action} ${p.resource}`}
+                          value={`${p.action} ${p.resource}`}
                         >
                           {p.action} @ {p.resource}
                         </option>
@@ -443,9 +537,8 @@ export function IamPage() {
                     variant="outline"
                     disabled={attachMutation.isPending || attachPerm === ""}
                     onClick={() => {
-                      const [action, resource] = attachPerm.split(" ");
+                      const [action, resource] = attachPerm.split(" ");
                       if (!action || !resource) return;
-                      setActionError(null);
                       attachMutation.mutate({ role: selectedRole, action, resource });
                     }}
                   >
@@ -466,95 +559,31 @@ export function IamPage() {
       {/* Каталог прав */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <KeyRound className="size-4" /> Права
+          <CardTitle className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <KeyRound className="size-4" /> Права
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => setCreatePermOpen(true)}>
+              <Plus className="size-4" /> Создать право
+            </Button>
           </CardTitle>
           <CardDescription>
             Каталог прав (пара действие/ресурс). Системные права защищены от
             удаления.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {permissionsQuery.isLoading && (
-            <p className="text-sm text-muted-foreground">Загрузка…</p>
-          )}
-          {permissionsQuery.isError && (
-            <p className="text-sm text-destructive">Не удалось загрузить права.</p>
-          )}
-          <ul className="flex flex-col gap-1 text-sm">
-            {permissions.map((p) => (
-              <li
-                key={`${p.action}:${p.resource}`}
-                className="flex items-center gap-2 font-mono text-xs"
-              >
-                <span>
-                  {p.action} @ {p.resource}
-                </span>
-                {p.system ? (
-                  <span
-                    className="flex items-center gap-0.5 text-muted-foreground"
-                    title="Системное право — защищено от удаления"
-                  >
-                    <Lock className="size-3" />
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    aria-label={`Удалить право ${p.action} ${p.resource}`}
-                    className="text-muted-foreground transition-colors hover:text-destructive"
-                    disabled={deletePermMutation.isPending}
-                    onClick={() => {
-                      setActionError(null);
-                      deletePermMutation.mutate({ action: p.action, resource: p.resource });
-                    }}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-
-          {/* Форма создания права */}
-          <form
-            className="flex items-end gap-2"
-            onSubmit={createPermForm.handleSubmit((values) => {
-              setActionError(null);
-              createPermMutation.mutate(values);
-            })}
-          >
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="new-action" className="text-sm font-medium">
-                Действие
-              </label>
-              <Input
-                id="new-action"
-                placeholder="например, deploy"
-                aria-invalid={Boolean(createPermForm.formState.errors.action)}
-                {...createPermForm.register("action")}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="new-resource" className="text-sm font-medium">
-                Ресурс
-              </label>
-              <Input
-                id="new-resource"
-                placeholder="например, project:demo"
-                aria-invalid={Boolean(createPermForm.formState.errors.resource)}
-                {...createPermForm.register("resource")}
-              />
-            </div>
-            <Button type="submit" variant="outline" disabled={createPermMutation.isPending}>
-              <Plus className="size-4" /> Создать
-            </Button>
-          </form>
-          {(createPermForm.formState.errors.action || createPermForm.formState.errors.resource) && (
-            <p className="text-sm text-destructive">
-              {createPermForm.formState.errors.action?.message ??
-                createPermForm.formState.errors.resource?.message}
-            </p>
-          )}
+        <CardContent>
+          <DataTable
+            columns={permColumns}
+            rows={permissions}
+            rowKey={(p) => `${p.action}:${p.resource}`}
+            caption="Каталог прав"
+            density="compact"
+            isLoading={permissionsQuery.isLoading}
+            isError={permissionsQuery.isError}
+            errorMessage="Не удалось загрузить права."
+            emptyMessage="Каталог прав пуст."
+          />
         </CardContent>
       </Card>
 
@@ -572,10 +601,7 @@ export function IamPage() {
         <CardContent>
           <form
             className="flex flex-col gap-4"
-            onSubmit={handleSubmit((values) => {
-              setActionError(null);
-              assignMutation.mutate(values);
-            })}
+            onSubmit={handleSubmit((values) => assignMutation.mutate(values))}
           >
             {/* Назначение роли возможно только выбором пользователя из каталога
                 (ADR-0016): нужно право (read, iam:directory). Без него пикер скрыт. */}
@@ -709,82 +735,176 @@ export function IamPage() {
             видны.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {subjectsQuery.isLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
-          {subjectsQuery.isError && (
-            <p className="text-sm text-destructive">Не удалось загрузить пользователей.</p>
-          )}
-          {subjects.length === 0 && subjectsQuery.data && (
-            <p className="text-sm text-muted-foreground">Нет пользователей с ролями.</p>
-          )}
-          <ul className="flex flex-col gap-2">
-            {subjects.map((s) => (
-              <li
-                key={s.subject}
-                className="flex flex-col gap-2 rounded-md border border-border p-3"
-              >
-                <div className="flex flex-col gap-0.5">
-                  {s.identity && s.identity.found ? (
-                    <>
-                      <span className="font-medium">
-                        {s.identity.display_name || s.identity.username || s.subject}
-                      </span>
-                      {s.identity.email && (
-                        <span className="text-xs text-muted-foreground">{s.identity.email}</span>
-                      )}
-                      <span className="font-mono text-xs text-muted-foreground">{s.subject}</span>
-                    </>
-                  ) : (
-                    <span className="flex items-center gap-2 font-medium">
-                      <span className="font-mono text-sm">{s.subject}</span>
-                      {s.identity && !s.identity.found && (
-                        <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
-                          <AlertTriangle className="size-3" /> нет в каталоге
-                        </span>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {s.roles.map((role) => (
-                    <span
-                      key={role}
-                      className="flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
-                    >
-                      {role}
-                      <button
-                        type="button"
-                        aria-label={`Снять роль ${role} с ${s.subject}`}
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                        disabled={revokeMutation.isPending}
-                        onClick={() => {
-                          setActionError(null);
-                          revokeMutation.mutate({ subject: s.subject, role });
-                        }}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </li>
-            ))}
-          </ul>
-          {subjectsQuery.hasNextPage && (
-            <div className="flex justify-center">
-              <Button
-                variant="outline"
-                disabled={subjectsQuery.isFetchingNextPage}
-                onClick={() => void subjectsQuery.fetchNextPage()}
-              >
-                {subjectsQuery.isFetchingNextPage ? "Загрузка…" : "Показать ещё"}
-              </Button>
-            </div>
-          )}
+        <CardContent>
+          <DataTable
+            columns={subjectColumns}
+            rows={subjects}
+            rowKey={(s) => s.subject}
+            caption="Пользователи с ролями"
+            isLoading={subjectsQuery.isLoading}
+            isError={subjectsQuery.isError}
+            errorMessage="Не удалось загрузить пользователей."
+            emptyMessage="Нет пользователей с ролями."
+            pagination={{
+              hasNextPage: Boolean(subjectsQuery.hasNextPage),
+              isFetchingNextPage: subjectsQuery.isFetchingNextPage,
+              onLoadMore: () => void subjectsQuery.fetchNextPage(),
+            }}
+          />
         </CardContent>
       </Card>
+
+      {/* Модалка создания роли */}
+      <Dialog
+        open={createRoleOpen}
+        onClose={() => setCreateRoleOpen(false)}
+        title="Создать роль"
+        description="Имя новой пользовательской роли."
+        footer={
+          <>
+            <Button type="button" variant="ghost" onClick={() => setCreateRoleOpen(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" form="create-role-form" disabled={createRoleMutation.isPending}>
+              {createRoleMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+              Создать
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="create-role-form"
+          className="flex flex-col gap-1.5"
+          onSubmit={createRoleForm.handleSubmit((values) => createRoleMutation.mutate(values))}
+        >
+          <label htmlFor="new-role" className="text-sm font-medium">
+            Новая роль
+          </label>
+          <Input
+            id="new-role"
+            placeholder="например, reviewers"
+            aria-invalid={Boolean(createRoleForm.formState.errors.name)}
+            {...createRoleForm.register("name")}
+          />
+          {createRoleForm.formState.errors.name && (
+            <p className="text-sm text-destructive">
+              {createRoleForm.formState.errors.name.message}
+            </p>
+          )}
+        </form>
+      </Dialog>
+
+      {/* Модалка создания права */}
+      <Dialog
+        open={createPermOpen}
+        onClose={() => setCreatePermOpen(false)}
+        title="Создать право"
+        description="Пара действие/ресурс нового пользовательского права."
+        footer={
+          <>
+            <Button type="button" variant="ghost" onClick={() => setCreatePermOpen(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" form="create-perm-form" disabled={createPermMutation.isPending}>
+              {createPermMutation.isPending && <Loader2 className="size-4 animate-spin" />}
+              Создать
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="create-perm-form"
+          className="flex flex-col gap-3"
+          onSubmit={createPermForm.handleSubmit((values) => createPermMutation.mutate(values))}
+        >
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="new-action" className="text-sm font-medium">
+              Действие
+            </label>
+            <Input
+              id="new-action"
+              placeholder="например, deploy"
+              aria-invalid={Boolean(createPermForm.formState.errors.action)}
+              {...createPermForm.register("action")}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="new-resource" className="text-sm font-medium">
+              Ресурс
+            </label>
+            <Input
+              id="new-resource"
+              placeholder="например, project:demo"
+              aria-invalid={Boolean(createPermForm.formState.errors.resource)}
+              {...createPermForm.register("resource")}
+            />
+          </div>
+          {(createPermForm.formState.errors.action || createPermForm.formState.errors.resource) && (
+            <p className="text-sm text-destructive">
+              {createPermForm.formState.errors.action?.message ??
+                createPermForm.formState.errors.resource?.message}
+            </p>
+          )}
+        </form>
+      </Dialog>
+
+      {/* Единый confirm-диалог деструктивных действий */}
+      <ConfirmDialog
+        open={confirm !== null}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => {
+          if (!confirm) return;
+          if (confirm.kind === "delete-role") deleteRoleMutation.mutate(confirm.role);
+          else if (confirm.kind === "delete-permission")
+            deletePermMutation.mutate({ action: confirm.action, resource: confirm.resource });
+          else if (confirm.kind === "detach")
+            detachMutation.mutate({
+              role: confirm.role,
+              action: confirm.action,
+              resource: confirm.resource,
+            });
+          else if (confirm.kind === "revoke")
+            revokeMutation.mutate({ subject: confirm.subject, role: confirm.role });
+          setConfirm(null);
+        }}
+        title={confirmTitle(confirm)}
+        description={confirmDescription(confirm)}
+        confirmLabel="Подтвердить"
+      />
     </section>
   );
+}
+
+// confirmTitle — заголовок confirm-диалога по виду действия.
+function confirmTitle(c: ConfirmState): string {
+  switch (c?.kind) {
+    case "delete-role":
+      return "Удалить роль?";
+    case "delete-permission":
+      return "Удалить право?";
+    case "detach":
+      return "Открепить право от роли?";
+    case "revoke":
+      return "Снять роль с пользователя?";
+    default:
+      return "";
+  }
+}
+
+// confirmDescription — пояснение confirm-диалога по виду действия.
+function confirmDescription(c: ConfirmState): string {
+  switch (c?.kind) {
+    case "delete-role":
+      return `Роль «${c.role}» будет удалена у всех носителей. Действие необратимо.`;
+    case "delete-permission":
+      return `Право «${c.action} @ ${c.resource}» будет удалено из каталога и откреплено от ролей.`;
+    case "detach":
+      return `Право «${c.action} @ ${c.resource}» будет откреплено от роли «${c.role}».`;
+    case "revoke":
+      return `Роль «${c.role}» будет снята с пользователя.`;
+    default:
+      return "";
+  }
 }
 
 // useDebounced возвращает значение с задержкой: пикер пользователя не дёргает
@@ -796,38 +916,4 @@ function useDebounced<T>(value: T, delayMs: number): T {
     return () => clearTimeout(id);
   }, [value, delayMs]);
   return debounced;
-}
-
-// mutationMessage переводит ошибку мутации назначения/снятия роли в стабильное
-// пользовательское сообщение (без раскрытия внутренних деталей сервера).
-function mutationMessage(err: unknown, verb: string): string {
-  switch (httpStatusOf(err)) {
-    case 403:
-      return "Недостаточно прав для управления ролями (нужно право write на iam:global).";
-    case 404:
-      return "Роль не найдена.";
-    case 400:
-      return "Некорректные данные запроса.";
-    default:
-      return `Не удалось ${verb} роль. Повторите попытку.`;
-  }
-}
-
-// catalogMessage переводит ошибку структурной мутации каталога (manage) в стабильное
-// пользовательское сообщение, разводя 403/404/409/422.
-function catalogMessage(err: unknown, verb: string): string {
-  switch (httpStatusOf(err)) {
-    case 403:
-      return "Недостаточно прав для изменения каталога (нужно право manage на iam:global).";
-    case 404:
-      return "Роль или право не найдены.";
-    case 409:
-      return "Такая роль или право уже существуют.";
-    case 422:
-      return "Системные роли и права защищены от изменения.";
-    case 400:
-      return "Некорректные данные запроса.";
-    default:
-      return `Не удалось ${verb}. Повторите попытку.`;
-  }
 }
