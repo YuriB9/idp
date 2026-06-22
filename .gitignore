@@ -22,3 +22,5 @@ web/dist/
 IDP.code-workspace
 
 .playwright-mcp
+# Тест-сертификаты E2E (генерируются `make e2e-certs`, не коммитятся).
+deploy/tls/
