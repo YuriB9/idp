@@ -4,10 +4,10 @@
 // ConfirmDialog. Системные права read-only. 403 на админку — fail-closed (IamGuard);
 // 403 на manage — структурные действия скрыты/заблокированы периметром, результат —
 // тост. Ответы валидируются zod в общих хуках.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { KeyRound, Loader2, Lock, Plus, Rows2, Rows3, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Lock, Plus, Rows2, Rows3, Search, Trash2 } from "lucide-react";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
@@ -30,11 +30,18 @@ type CreatePermissionValues = z.infer<typeof createPermissionSchema>;
 // ConfirmState — подтверждение удаления пользовательского права.
 type ConfirmState = { action: string; resource: string } | null;
 
+// TypeFilter — фильтр каталога по типу права (все/системные/пользовательские).
+type TypeFilter = "all" | "system" | "user";
+
 export function PermissionsPage() {
   const [createPermOpen, setCreatePermOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   // Плотность таблицы (idp-density) — сохраняется между сессиями.
   const [density, setDensity] = useState<Density>(readDensity);
+  // Клиентский фильтр каталога: поиск подстрокой + тип. Состояние эфемерно
+  // (не в URL): фильтрация мгновенная, поверх уже загруженных данных.
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
   const permissionsQuery = usePermissionsQuery();
   const createPermMutation = useCreatePermission();
@@ -46,6 +53,30 @@ export function PermissionsPage() {
   });
 
   const permissions = permissionsQuery.data?.permissions ?? [];
+
+  // Подсказки для формы создания: РАЗЛИЧНЫЕ action/resource из уже загруженного
+  // каталога (без новых запросов — в контракте нет эндпоинта доступных значений).
+  const actionOptions = useMemo(
+    () => [...new Set(permissions.map((p) => p.action))].sort(),
+    [permissions],
+  );
+  const resourceOptions = useMemo(
+    () => [...new Set(permissions.map((p) => p.resource))].sort(),
+    [permissions],
+  );
+
+  // Клиентская фильтрация поверх каталога: подстрока по action/resource + тип.
+  // Сортировка/плотность/пагинация DataTable работают поверх этого массива.
+  const filterActive = search.trim() !== "" || typeFilter !== "all";
+  const filteredPermissions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return permissions.filter((p) => {
+      if (typeFilter === "system" && !p.system) return false;
+      if (typeFilter === "user" && p.system) return false;
+      if (q === "") return true;
+      return p.action.toLowerCase().includes(q) || p.resource.toLowerCase().includes(q);
+    });
+  }, [permissions, search, typeFilter]);
 
   // toggleDensity переключает и сохраняет плотность таблицы.
   const toggleDensity = () => {
@@ -125,16 +156,47 @@ export function PermissionsPage() {
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <KeyRound className="size-4" /> Системные права защищены от удаления.
           </p>
+
+          {/* Тулбар клиентской фильтрации каталога (поиск + тип). DataTable не
+              изменяется: фильтрация локальна, поверх переданных строк. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 sm:max-w-xs">
+              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                className="pl-8"
+                placeholder="поиск по действию или ресурсу"
+                aria-label="Поиск по каталогу прав"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="perm-type-filter" className="sr-only">
+                Фильтр по типу права
+              </label>
+              <select
+                id="perm-type-filter"
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+              >
+                <option value="all">Все типы</option>
+                <option value="system">Системные</option>
+                <option value="user">Пользовательские</option>
+              </select>
+            </div>
+          </div>
+
           <DataTable
             columns={permColumns}
-            rows={permissions}
+            rows={filteredPermissions}
             rowKey={(p) => `${p.action}:${p.resource}`}
             caption="Каталог прав"
             density={density}
             isLoading={permissionsQuery.isLoading}
             isError={permissionsQuery.isError}
             errorMessage="Не удалось загрузить права."
-            emptyMessage="Каталог прав пуст."
+            emptyMessage={filterActive ? "Ничего не найдено." : "Каталог прав пуст."}
           />
         </div>
       </IamGuard>
@@ -173,12 +235,20 @@ export function PermissionsPage() {
             <label htmlFor="new-action" className="text-sm font-medium">
               Действие
             </label>
+            {/* Подсказки доступных действий из каталога; ввод нового валидного
+                значения остаётся возможным (нативный datalist, без UI-китов). */}
             <Input
               id="new-action"
+              list="perm-action-options"
               placeholder="например, deploy"
               aria-invalid={Boolean(createPermForm.formState.errors.action)}
               {...createPermForm.register("action")}
             />
+            <datalist id="perm-action-options">
+              {actionOptions.map((a) => (
+                <option key={a} value={a} />
+              ))}
+            </datalist>
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="new-resource" className="text-sm font-medium">
@@ -186,10 +256,16 @@ export function PermissionsPage() {
             </label>
             <Input
               id="new-resource"
+              list="perm-resource-options"
               placeholder="например, project:demo"
               aria-invalid={Boolean(createPermForm.formState.errors.resource)}
               {...createPermForm.register("resource")}
             />
+            <datalist id="perm-resource-options">
+              {resourceOptions.map((r) => (
+                <option key={r} value={r} />
+              ))}
+            </datalist>
           </div>
           {(createPermForm.formState.errors.action || createPermForm.formState.errors.resource) && (
             <p className="text-sm text-destructive">

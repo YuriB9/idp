@@ -135,7 +135,8 @@ describe("UsersPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByRole("button", { name: /Назначить/i });
+    // Назначение происходит в модалке — сначала открываем её из заголовка.
+    await user.click(await screen.findByRole("button", { name: /Назначить роль/i }));
     await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
     await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
     await user.click(await screen.findByText("Dev User"));
@@ -143,18 +144,59 @@ describe("UsersPage", () => {
       expect(screen.queryByLabelText(/Поиск пользователя/i)).not.toBeInTheDocument(),
     );
     await user.selectOptions(screen.getByLabelText(/^Роль/i), "iam-admin");
-    await user.click(screen.getByRole("button", { name: /Назначить/i }));
+    await user.click(screen.getByRole("button", { name: /^Назначить$/ }));
 
     await waitFor(() => expect(assignRole).toHaveBeenCalledTimes(1));
     expect(assignRole).toHaveBeenCalledWith(undefined, {
       params: { subject: "11111111-1111-1111-1111-111111111111", role: "iam-admin" },
     });
+    // После успеха модалка закрывается.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /Назначить роль/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("модалка: открытие и закрытие со сбросом состояния", async () => {
+    searchDirectorySubjects.mockResolvedValue({
+      subjects: [
+        {
+          subject: "11111111-1111-1111-1111-111111111111",
+          username: "dev",
+          email: "dev@example.com",
+          display_name: "Dev User",
+          enabled: true,
+          found: true,
+        },
+      ],
+      next_cursor: "",
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+
+    // Открываем, выбираем пользователя, закрываем без отправки.
+    await user.click(await screen.findByRole("button", { name: /Назначить роль/i }));
+    await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
+    await user.click(await screen.findByText("Dev User"));
+    await user.click(screen.getByRole("button", { name: /Отмена/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /Назначить роль/i })).not.toBeInTheDocument(),
+    );
+
+    // Повторное открытие — состояние чистое: снова поле поиска, карточка
+    // выбранного пользователя сброшена (нет кнопки сброса выбора).
+    await user.click(screen.getByRole("button", { name: /Назначить роль/i }));
+    expect(screen.getByLabelText(/Поиск пользователя/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Сбросить выбор пользователя/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("валидация формы: пользователь не выбран → запрос не уходит", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(await screen.findByRole("button", { name: /Назначить/i }));
+    await user.click(await screen.findByRole("button", { name: /Назначить роль/i }));
+    await user.click(await screen.findByRole("button", { name: /^Назначить$/ }));
     expect(await screen.findByText(/Выберите пользователя/i)).toBeInTheDocument();
     expect(assignRole).not.toHaveBeenCalled();
   });
@@ -183,7 +225,7 @@ describe("UsersPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByRole("button", { name: /Назначить/i });
+    await user.click(await screen.findByRole("button", { name: /Назначить роль/i }));
     await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
     await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
     await waitFor(() =>
@@ -197,7 +239,7 @@ describe("UsersPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await screen.findByRole("button", { name: /Назначить/i });
+    await user.click(await screen.findByRole("button", { name: /Назначить роль/i }));
     await user.type(screen.getByLabelText(/Поиск пользователя/i), "dev");
     await waitFor(() => expect(searchDirectorySubjects).toHaveBeenCalled());
 
