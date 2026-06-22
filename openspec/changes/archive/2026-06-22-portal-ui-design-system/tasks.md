@@ -125,6 +125,6 @@
   зелёные (плюс `npm run build` — успешен)
 - [x] 13.2 Убедиться, что `web/src/api/*`, `web/public/openapi.yaml`,
   `openapi/openapi.yaml` НЕ изменены (отсутствуют в diff)
-- [ ] 13.3 Открыть PR; дождаться полного зелёного CI (go test всех модулей,
+- [x] 13.3 Открыть PR; дождаться полного зелёного CI (go test всех модулей,
   golangci-lint, govulncheck, gen:check, openapi-lint, web-test, integration,
-  conformance)
+  conformance) — PR #50 смержен в master с зелёным CI
