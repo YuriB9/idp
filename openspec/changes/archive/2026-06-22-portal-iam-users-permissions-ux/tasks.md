@@ -64,5 +64,5 @@
 - [x] 5.2 Полный прогон `web`: `npx tsc --noEmit` + `npx vitest run` — зелёные
 - [x] 5.3 Сверить, что контракт и кодоген НЕ изменены: `openapi/openapi.yaml`,
   `web/src/api/*`, `web/public/openapi.yaml` без правок; `npm run gen:check` зелёный
-- [ ] 5.4 Открыть PR с зелёным CI; после merge — `/opsx:archive` отдельным PR
+- [x] 5.4 Открыть PR с зелёным CI; после merge — `/opsx:archive` отдельным PR
   sync+archive
