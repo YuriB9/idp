@@ -54,4 +54,4 @@
 - [x] 8.2 `go test -race -shuffle=on` всех модулей, `golangci-lint`, `govulncheck`, openapi-lint, web-test — зелёные; CI остаётся как был (без подъёма стенда)
 - [x] 8.3 Базовая локалка (`docker compose up`) и `conformance`-таргет по-прежнему работают
 - [x] 8.4 Локально вручную прогнать `make e2e-*` и убедиться, что весь набор 4 user stories зелёный
-- [ ] 8.5 Открыть PR с зелёным CI; после merge — отдельный PR sync+archive через `/opsx:archive`
+- [x] 8.5 Открыть PR с зелёным CI (#56); после merge — отдельный PR sync+archive через `/opsx:archive`
