@@ -28,6 +28,13 @@
   --color-background: var(--background);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  /* Семантические токены уровней критичности систем (ADR-0017): визуальная
+     иерархия критичности. Используются ТОЛЬКО через компонент бейджа критичности
+     по правилу «цвет + иконка + текст» (не только цвет, colorblind-safe). */
+  --color-criticality-low: var(--criticality-low);
+  --color-criticality-medium: var(--criticality-medium);
+  --color-criticality-high: var(--criticality-high);
+  --color-criticality-critical: var(--criticality-critical);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -54,6 +61,13 @@
   --destructive: oklch(0.577 0.245 27.325);
   --success: oklch(0.62 0.17 145);
   --warning: oklch(0.75 0.16 75);
+  /* Палитра критичности (светлая тема): low → нейтрально-синий, medium → янтарный,
+     high → оранжевый, critical → красный. Подобраны под WCAG AA контраст на фоне
+     карточки/таблицы (используются как сплошной текст на подложке цвета/15). */
+  --criticality-low: oklch(0.55 0.12 240);
+  --criticality-medium: oklch(0.68 0.15 75);
+  --criticality-high: oklch(0.62 0.19 45);
+  --criticality-critical: oklch(0.55 0.24 27);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -78,6 +92,12 @@
   --destructive: oklch(0.704 0.191 22.216);
   --success: oklch(0.7 0.16 150);
   --warning: oklch(0.8 0.15 80);
+  /* Палитра критичности (тёмная тема): осветлённые тона для контраста с тёмной
+     подложкой (текст на фоне цвета/15), сохраняя различимость уровней по WCAG AA. */
+  --criticality-low: oklch(0.72 0.12 240);
+  --criticality-medium: oklch(0.82 0.15 80);
+  --criticality-high: oklch(0.75 0.18 50);
+  --criticality-critical: oklch(0.7 0.19 22);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);

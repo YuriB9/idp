@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { CreateServicePage } from "./CreateServicePage";
+import { ToastProvider } from "@/components/ui/toast";
 
 // Мокаем клиент периметра, сохраняя реальные zod-схемы (источник валидации).
 // vi.hoisted нужен, т.к. фабрика vi.mock поднимается в начало файла.
@@ -20,12 +21,14 @@ function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/projects/demo/services/new"]}>
-        <Routes>
-          <Route path="/projects/:project/services/new" element={<CreateServicePage />} />
-          <Route path="/projects/:project/services/:name" element={<div>экран прогресса: svc</div>} />
-        </Routes>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={["/projects/demo/services/new"]}>
+          <Routes>
+            <Route path="/projects/:project/services/new" element={<CreateServicePage />} />
+            <Route path="/projects/:project/services/:name" element={<div>экран прогресса: svc</div>} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }
@@ -56,5 +59,16 @@ describe("CreateServicePage", () => {
 
     await screen.findByText(/String must contain at least 1 character|Некорректное имя|Required/i);
     expect(createService).not.toHaveBeenCalled();
+  });
+
+  it("конфликт имени (409) → тост без раскрытия внутренних деталей", async () => {
+    createService.mockRejectedValue({ response: { status: 409 } });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(screen.getByLabelText(/Имя сервиса/i), "svc");
+    await user.click(screen.getByRole("button", { name: /Создать/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/уже существует/i);
   });
 });

@@ -6,6 +6,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
 import { ThemeProvider, applyTheme, readInitialTheme } from "./lib/theme";
+import { ToastProvider } from "./components/ui/toast";
 import "./index.css";
 
 // Применяем сохранённую (или дефолтную тёмную) тему синхронно до первого рендера,
@@ -31,9 +32,11 @@ createRoot(rootElement).render(
   <StrictMode>
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <ToastProvider>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </ToastProvider>
       </QueryClientProvider>
     </ThemeProvider>
   </StrictMode>,

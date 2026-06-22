@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
 import { IamPage } from "./IamPage";
+import { ToastProvider } from "@/components/ui/toast";
 
 // Мокаем клиент периметра, сохраняя реальные zod-схемы.
 const {
@@ -71,9 +72,11 @@ function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/iam"]}>
-        <IamPage />
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={["/iam"]}>
+          <IamPage />
+        </MemoryRouter>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }
@@ -167,10 +170,11 @@ describe("IamPage", () => {
     const user = userEvent.setup();
     renderPage();
 
+    // Создание роли теперь в модалке: открываем, заполняем имя, подтверждаем.
+    await user.click(await screen.findByRole("button", { name: /Создать роль/i }));
     const nameInput = await screen.findByLabelText(/Новая роль/i);
-    const roleForm = nameInput.closest("form") as HTMLElement;
     await user.type(nameInput, "reviewers");
-    await user.click(within(roleForm).getByRole("button", { name: /Создать/i }));
+    await user.click(screen.getByRole("button", { name: /^Создать$/ }));
 
     await waitFor(() => expect(createRole).toHaveBeenCalledTimes(1));
     expect(createRole).toHaveBeenCalledWith({ name: "reviewers" });
@@ -192,6 +196,8 @@ describe("IamPage", () => {
     // У системной роли нет кнопки удаления, у пользовательской — есть.
     expect(screen.queryByLabelText(/Удалить роль iam-admin/i)).not.toBeInTheDocument();
     await user.click(screen.getByLabelText(/Удалить роль reviewers/i));
+    // Деструктивное действие требует подтверждения в ConfirmDialog.
+    await user.click(await screen.findByRole("button", { name: /Подтвердить/i }));
 
     await waitFor(() => expect(deleteRole).toHaveBeenCalledTimes(1));
     expect(deleteRole).toHaveBeenCalledWith(undefined, { params: { role: "reviewers" } });
@@ -235,6 +241,8 @@ describe("IamPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "reviewers" }));
     await user.click(await screen.findByLabelText(/Открепить право read iam:global/i));
+    // Открепление — деструктивно: подтверждаем в ConfirmDialog.
+    await user.click(await screen.findByRole("button", { name: /Подтвердить/i }));
 
     await waitFor(() => expect(detachPermission).toHaveBeenCalledTimes(1));
     expect(detachPermission).toHaveBeenCalledWith(undefined, {

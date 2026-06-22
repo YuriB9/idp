@@ -1,22 +1,22 @@
-// Карточка владельцев сервиса: отображение текущего состава и форма его
-// изменения. Источник правды клиентской валидации — zod (через zodResolver);
-// мутация идёт через периметр (PUT /projects/{project}/services/{name}/owners) с
-// optimistic-concurrency по owners_version. Обрабатываем 403 (нет права) и 409
-// (конфликт версии — устаревшие данные) понятными сообщениями без раскрытия
-// внутренних деталей сервера.
+// Карточка владельцев сервиса: отображение текущего состава и изменение через
+// модальное окно (Dialog, ADR-0017). Источник правды клиентской валидации формы —
+// zod (через zodResolver); мутация идёт через периметр (PUT .../owners) с
+// optimistic-concurrency по owners_version. Результат — через тосты (единый маппинг
+// 403/409), без раскрытия внутренних деталей сервера.
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Users } from "lucide-react";
+import { Loader2, Users } from "lucide-react";
 import { z } from "zod";
 
 import { apiClient } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 
 // ownersFormSchema — форма ввода владельцев: свободный текст (по строкам/запятым).
-// Преобразование в нормализованный набор делает parseOwners.
 const ownersFormSchema = z.object({ ownersText: z.string() });
 type OwnersForm = z.infer<typeof ownersFormSchema>;
 
@@ -31,14 +31,6 @@ export function parseOwners(text: string): string[] {
   return [...seen].sort();
 }
 
-// httpStatusOf аккуратно достаёт HTTP-статус из ошибки zodios/axios.
-function httpStatusOf(err: unknown): number | undefined {
-  if (typeof err === "object" && err !== null && "response" in err) {
-    return (err as { response?: { status?: number } }).response?.status;
-  }
-  return undefined;
-}
-
 type Props = {
   project: string;
   name: string;
@@ -48,7 +40,8 @@ type Props = {
 
 export function OwnersCard({ project, name, owners, ownersVersion }: Props) {
   const queryClient = useQueryClient();
-  const [serverError, setServerError] = useState<string | null>(null);
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
 
   const { register, handleSubmit, reset } = useForm<OwnersForm>({
     resolver: zodResolver(ownersFormSchema),
@@ -67,22 +60,18 @@ export function OwnersCard({ project, name, owners, ownersVersion }: Props) {
         { params: { project, name } },
       ),
     onSuccess: () => {
-      setServerError(null);
-      // Перечитываем сервис: актуальные владельцы и версия.
+      toast.success("Состав владельцев обновлён.");
+      setOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["service", project, name] });
     },
-    onError: (err) => {
-      const code = httpStatusOf(err);
-      if (code === 403) {
-        setServerError("Недостаточно прав для изменения владельцев.");
-      } else if (code === 409) {
-        setServerError(
-          "Состав владельцев изменился в другом месте. Обновите страницу и повторите.",
-        );
-      } else {
-        setServerError("Не удалось изменить владельцев. Повторите попытку.");
-      }
-    },
+    onError: (err) =>
+      toast.error(err, {
+        action: "изменить владельцев",
+        overrides: {
+          403: "Недостаточно прав для изменения владельцев.",
+          409: "Состав владельцев изменился в другом месте. Обновите страницу и повторите.",
+        },
+      }),
   });
 
   return (
@@ -109,38 +98,51 @@ export function OwnersCard({ project, name, owners, ownersVersion }: Props) {
           <p className="text-sm text-muted-foreground">Владельцы не назначены.</p>
         )}
 
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={handleSubmit((values) => {
-            setServerError(null);
-            mutation.mutate(values);
-          })}
+        <div className="flex justify-end">
+          <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+            Изменить владельцев
+          </Button>
+        </div>
+
+        <Dialog
+          open={open}
+          onClose={() => setOpen(false)}
+          title="Изменить владельцев"
+          description="Укажите полный желаемый состав владельцев (по одному в строке или через запятую)."
+          footer={
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setOpen(false)}
+                disabled={mutation.isPending}
+              >
+                Отмена
+              </Button>
+              <Button type="submit" form="owners-form" disabled={mutation.isPending}>
+                {mutation.isPending && <Loader2 className="size-4 animate-spin" />}
+                Сохранить владельцев
+              </Button>
+            </>
+          }
         >
-          <label htmlFor="ownersText" className="text-sm font-medium">
-            Новый состав владельцев (по одному в строке или через запятую)
-          </label>
-          <textarea
-            id="ownersText"
-            rows={4}
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            placeholder="alice&#10;bob"
-            {...register("ownersText")}
-          />
-
-          {serverError && (
-            <p className="flex items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              <AlertTriangle className="size-4 shrink-0" />
-              {serverError}
-            </p>
-          )}
-
-          <div className="flex justify-end">
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending && <Loader2 className="size-4 animate-spin" />}
-              {mutation.isPending ? "Сохраняем…" : "Сохранить владельцев"}
-            </Button>
-          </div>
-        </form>
+          <form
+            id="owners-form"
+            className="flex flex-col gap-2"
+            onSubmit={handleSubmit((values) => mutation.mutate(values))}
+          >
+            <label htmlFor="ownersText" className="text-sm font-medium">
+              Новый состав владельцев
+            </label>
+            <textarea
+              id="ownersText"
+              rows={4}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="alice&#10;bob"
+              {...register("ownersText")}
+            />
+          </form>
+        </Dialog>
       </CardContent>
     </Card>
   );
