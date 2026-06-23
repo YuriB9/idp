@@ -168,3 +168,70 @@ e2e: e2e-up
 ## e2e-logs: собрать логи E2E-стенда (диагностика при падении набора).
 e2e-logs:
 	$(COMPOSE_E2E) logs --no-color
+
+# === Интеграционные тесты воркфлоу против РЕАЛЬНОГО GitLab (ADR-0019) ===
+# Прогон ТОЛЬКО локальный, ручной: GitLab CE тяжёл (~2.5GB, старт 3-5 мин), в CI не
+# поднимается. Стенд = базовая локалка + реальный OIDC (e2e-override, чтобы
+# переиспользовать харнесс tests/e2e через oauth2-proxy) + реальный GitLab
+# (gitlab-override). Vault/Harbor остаются моками. Готовность GitLab ждёт healthcheck
+# compose и сам набор (requireGitLab), очистка — `down -v`.
+COMPOSE_GITLAB := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.e2e.yml -f deploy/compose/docker-compose.gitlab.yml
+# Публикуемый адрес реального GitLab для сидирования и ассертов набора через GitLab API.
+GITLAB_API_URL ?= http://localhost:8929
+# Фиксированный root-PAT (фикстура стенда): должен совпадать с SEED_TOKEN/GITLAB_TOKEN
+# в docker-compose.gitlab.yml. password-grant в GitLab отключён, поэтому токен минтит
+# seed.rb через gitlab-rails runner ИМЕННО этим значением.
+GITLAB_TOKEN ?= glpat-idpdevinfraseed01234
+# Пароль тест-пользователей (alice/bob), создаваемых сидом по REST.
+SEED_USER_PASSWORD ?= Idp-9fK2-xQ7w-Vb3T
+# Бюджет ожидания готовности GitLab/воркфлоу (GitLab стартует медленно).
+GITLAB_STATUS_TIMEOUT ?= 600s
+
+.PHONY: gitlab-up gitlab-seed gitlab-test gitlab-down gitlab gitlab-logs
+
+## gitlab-up: поднять стенд с реальным GitLab (реальный OIDC + реальный GitLab) в
+## фоне, дождаться готовности GitLab и засеять его (gitlab-seed).
+gitlab-up: e2e-certs
+	$(COMPOSE_GITLAB) up --build -d
+	@$(MAKE) gitlab-seed
+
+## gitlab-seed: дождаться готовности GitLab и засеять детерминированно — выпустить
+## фиксированный root-PAT через `gitlab-rails runner /seed.rb` ВНУТРИ контейнера
+## gitlab (ROPC отключён), затем создать группы demo/demo2 и пользователей alice/bob
+## по REST. Идемпотентно (повторный прогон безопасен).
+gitlab-seed:
+	@echo ">> ждём готовности GitLab ($(GITLAB_API_URL)); холодный старт 3-5 мин ..."
+	@for i in $$(seq 1 90); do \
+		if curl -fsS $(GITLAB_API_URL)/-/health >/dev/null 2>&1; then echo ">> GitLab готов"; break; fi; \
+		sleep 5; \
+	done
+	@echo ">> выпускаем фиксированный root-PAT (gitlab-rails runner) ..."
+	@$(COMPOSE_GITLAB) exec -T gitlab gitlab-rails runner /seed.rb
+	@echo ">> сидируем группы/пользователей по REST ..."
+	@GITLAB_URL="$(GITLAB_API_URL)" GITLAB_TOKEN="$(GITLAB_TOKEN)" SEED_USER_PASSWORD="$(SEED_USER_PASSWORD)" \
+		sh deploy/compose/gitlab-seed/seed.sh
+
+## gitlab-test: прогнать интеграционный набор против поднятого и засеянного стенда.
+## Токен — фиксированная фикстура GITLAB_TOKEN (тот же root-PAT, что выпустил seed.rb).
+gitlab-test:
+	cd tests/e2e && \
+		E2E_PROXY_URL="$(E2E_PROXY_URL)" \
+		E2E_KEYCLOAK_URL="$(E2E_KEYCLOAK_URL)" \
+		E2E_STATUS_TIMEOUT="$(GITLAB_STATUS_TIMEOUT)" \
+		GITLAB_API_URL="$(GITLAB_API_URL)" \
+		GITLAB_TOKEN="$(GITLAB_TOKEN)" \
+		GITLAB_STATUS_TIMEOUT="$(GITLAB_STATUS_TIMEOUT)" \
+		go test -tags=integration -count=1 -v ./...
+
+## gitlab-down: остановить стенд с реальным GitLab и очистить тома.
+gitlab-down:
+	$(COMPOSE_GITLAB) down -v
+
+## gitlab: полный локальный цикл — поднять стенд, прогнать набор, гарантированно
+## погасить стенд (очистка выполняется даже при падении тестов).
+gitlab: gitlab-up
+	@$(MAKE) gitlab-test; rc=$$?; $(MAKE) gitlab-down; exit $$rc
+
+## gitlab-logs: собрать логи стенда с реальным GitLab (диагностика).
+gitlab-logs:
+	$(COMPOSE_GITLAB) logs --no-color

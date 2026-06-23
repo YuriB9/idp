@@ -1,0 +1,74 @@
+# Override-профиль: РЕАЛЬНЫЙ GitLab CE вместо WireMock-мока для DevInfra worker
+# (ADR-0019). Подключается ПОВЕРХ базовой локалки и НЕ входит в дефолтный
+# `docker compose up` — образ тяжёлый (~2.5GB) и стартует медленно (3-5 мин),
+# поэтому профиль только для локального ручного прогона интеграционных тестов
+# (см. Makefile цели gitlab-up/gitlab-test/gitlab-down). Vault и Harbor ОСТАЮТСЯ
+# моками (граница MVP).
+#
+# Сидирование (см. Makefile цель gitlab-up): после готовности GitLab Makefile
+# выпускает фиксированный root-PAT через `gitlab-rails runner /seed.rb` ВНУТРИ
+# контейнера gitlab (password-grant в GitLab отключён, поэтому bootstrap токена —
+# через Rails), затем создаёт группы/пользователей по REST (gitlab-seed/seed.sh).
+#
+# Базовая локалка (docker-compose.yml) и e2e-override (docker-compose.e2e.yml) этот
+# файл НЕ затрагивают: они не ссылаются на сервис gitlab и не задают воркеру
+# GITLAB_TOKEN, поэтому продолжают ходить к mock-gitlab.
+name: idp
+
+services:
+  # Реальный GitLab CE. Пиннут по тегу версии для воспроизводимости. Стартует
+  # медленно: healthcheck с большим start_period; зависящие сервисы ждут готовности.
+  gitlab:
+    image: gitlab/gitlab-ce:19.0.2-ce.0
+    # external_url без порта → GitLab слушает :80 внутри сети compose; воркер ходит
+    # на http://gitlab. initial_root_password — детерминированная фикстура стенда
+    # (не секрет прода). SEED_TOKEN/SEED_USER_PASSWORD читает seed.rb (gitlab-rails
+    # runner) при сидировании из Makefile.
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab'
+        gitlab_rails['initial_root_password'] = 'Idp-9fK2-xQ7w-Vb3T'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        puma['worker_processes'] = 2
+        prometheus_monitoring['enable'] = false
+        # Эндпоинты мониторинга (/-/health, /-/readiness) по умолчанию доступны
+        # только с 127.0.0.1, иначе 404. На локальном тест-стенде разрешаем любой
+        # адрес, чтобы health-проба проходила и с хоста, и из контейнера набора.
+        gitlab_rails['monitoring_whitelist'] = ['0.0.0.0/0', '::/0']
+      # Фикстуры стенда для seed.rb (выпуск фиксированного root-PAT и пароль
+      # тест-пользователей). Те же значения использует Makefile/набор.
+      SEED_TOKEN: "glpat-idpdevinfraseed01234"
+      SEED_USER_PASSWORD: "Idp-9fK2-xQ7w-Vb3T"
+    # GitLab CE прожорлив к памяти; shm увеличиваем, чтобы избежать падений Postgres.
+    shm_size: "256m"
+    # Ruby-сид монтируем внутрь — его запускает `gitlab-rails runner /seed.rb`.
+    volumes:
+      - ./gitlab-seed/seed.rb:/seed.rb:ro
+    healthcheck:
+      # /-/health отвечает 200 при готовности приложения. curl присутствует в образе.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:80/-/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 300s
+    ports:
+      - "8929:80"
+
+  # Переключаем worker на реальный GitLab: базовый URL → http://gitlab, токен —
+  # фиксированная фикстура (тот же root-PAT, что выпускает seed.rb), маппинг
+  # владельцев UUID→логин. SSRF_DISABLED=true: GitLab на приватном http-адресе
+  # стенда (в проде guard включён).
+  devinfra-worker:
+    environment:
+      GITLAB_BASE_URL: "http://gitlab"
+      # Должен совпадать с SEED_TOKEN сервиса gitlab и GITLAB_TOKEN в Makefile.
+      GITLAB_TOKEN: "glpat-idpdevinfraseed01234"
+      # Маппинг владельцев на тест-пользователей GitLab для SyncMembers. Ключи — это
+      # субъекты, которыми система оперирует в роли владельца: UUID realm Keycloak
+      # (subjAlice/subjBob из автотестов tests/e2e) И логины (портал в локалке может
+      # задавать владельца логином). Незаданный субъект → участник просто пропускается.
+      GITLAB_OWNER_LOGINS: "22222222-2222-2222-2222-222222222222=alice,33333333-3333-3333-3333-333333333333=bob,alice=alice,bob=bob"
+      SSRF_DISABLED: "true"
+    depends_on:
+      gitlab:
+        condition: service_healthy
