@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 
@@ -57,6 +58,51 @@ func (a idmRoleAdmin) RevokeRole(ctx context.Context, subject, role string) erro
 	return err
 }
 
+// parseOwnerLogins разбирает фикстуру маппинга владельцев из переменной окружения
+// в формате "subject1=login1,subject2=login2" (subject — UUID Keycloak, login —
+// GitLab-логин). Пустые/битые элементы пропускаются. Используется только профилем
+// реального GitLab; в дефолтном прогоне отображение пустое.
+func parseOwnerLogins(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// gitLabToken возвращает токен аутентификации к GitLab: прямое значение GITLAB_TOKEN,
+// либо (если оно пусто) содержимое файла GITLAB_TOKEN_FILE — секрет тогда не светится
+// в env и подаётся через смонтированный файл/том (детерминированный сид стенда пишет
+// туда свежевыданный root-PAT). Пусто → клиент работает против WireMock-мока.
+func gitLabToken() (string, error) {
+	if tok := strings.TrimSpace(config.String("GITLAB_TOKEN", "")); tok != "" {
+		return tok, nil
+	}
+	path := strings.TrimSpace(config.String("GITLAB_TOKEN_FILE", ""))
+	if path == "" {
+		return "", nil
+	}
+	// Путь задаётся оператором стенда через env (контролируемый источник, не ввод
+	// пользователя); том со секретом монтируется compose-профилем реального GitLab.
+	raw, err := os.ReadFile(path) //nolint:gosec // путь из доверенного env стенда
+	if err != nil {
+		return "", fmt.Errorf("devinfra-worker: чтение GITLAB_TOKEN_FILE: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Default().Error("devinfra-worker: fatal", logger.Err(err))
@@ -95,11 +141,22 @@ func run() error {
 		return err
 	}
 	guarded := !ssrfDisabled
+	// Выбор реализации GitLab-клиента: при заданном токене (GITLAB_TOKEN или
+	// GITLAB_TOKEN_FILE) собирается клиент против РЕАЛЬНОГО GitLab (аутентификация
+	// PRIVATE-TOKEN + резолвинг namespace→group_id и владелец→user_id, ADR-0019);
+	// иначе — поведение по умолчанию (клиент против WireMock-мока). Vault/Harbor
+	// всегда моки (граница MVP).
+	gitlabToken, err := gitLabToken()
+	if err != nil {
+		return err
+	}
 	clients, err := integrations.NewHTTPClients(integrations.Config{
-		GitLabBaseURL: config.String("GITLAB_BASE_URL", "http://mock-gitlab:8080"),
-		VaultBaseURL:  config.String("VAULT_BASE_URL", "http://mock-vault:8080"),
-		HarborBaseURL: config.String("HARBOR_BASE_URL", "http://mock-harbor:8080"),
-		Guarded:       guarded,
+		GitLabBaseURL:     config.String("GITLAB_BASE_URL", "http://mock-gitlab:8080"),
+		VaultBaseURL:      config.String("VAULT_BASE_URL", "http://mock-vault:8080"),
+		HarborBaseURL:     config.String("HARBOR_BASE_URL", "http://mock-harbor:8080"),
+		GitLabToken:       gitlabToken,
+		GitLabOwnerLogins: parseOwnerLogins(config.String("GITLAB_OWNER_LOGINS", "")),
+		Guarded:           guarded,
 	})
 	if err != nil {
 		return err
