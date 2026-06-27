@@ -19,9 +19,12 @@ type Props = {
   project: string;
   name: string;
   status: string;
+  // onStarted — вызывается после принятого запуска вывода из эксплуатации;
+  // страница поднимает единый ступенчатый прогресс (вместо тоста об успехе).
+  onStarted?: () => void;
 };
 
-export function DecommissionCard({ project, name, status }: Props) {
+export function DecommissionCard({ project, name, status, onStarted }: Props) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -40,10 +43,11 @@ export function DecommissionCard({ project, name, status }: Props) {
         { params: { project, name } },
       ),
     onSuccess: () => {
-      toast.success("Сервис выведен из эксплуатации.");
+      // Ход и исход показываем не тостом, а единым ступенчатым прогрессом.
       setOpen(false);
       setConfirmName("");
       setLoadDrained(false);
+      onStarted?.();
       void queryClient.invalidateQueries({ queryKey: ["service", project, name] });
     },
     onError: (err) =>

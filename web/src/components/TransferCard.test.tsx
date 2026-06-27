@@ -1,6 +1,7 @@
 // Тесты карточки переноса сервиса (ADR-0017): действие через ConfirmDialog
-// (открыть → целевой проект + имя → подтвердить), результат и ошибки (403/409/422) —
-// через тосты; блокировка для неактивного/переносимого сервиса.
+// (открыть → целевой проект + имя → подтвердить); успех поднимает единый
+// ступенчатый прогресс (onStarted), а не тост; ошибки (403/409/422) — через
+// тосты; блокировка для неактивного/переносимого сервиса.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,12 +17,12 @@ vi.mock("@/api", async (importOriginal) => {
   return { ...actual, apiClient: { transferService } };
 });
 
-function renderCard(status = "active") {
+function renderCard(status = "active", onStarted?: () => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <TransferCard project="demo" name="svc" status={status} />
+        <TransferCard project="demo" name="svc" status={status} onStarted={onStarted} />
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -58,7 +59,7 @@ describe("TransferCard", () => {
     expect(screen.getByRole("button", { name: /^Перенести$/i })).toBeDisabled();
   });
 
-  it("happy-path: target_project уходит в периметр после подтверждения", async () => {
+  it("happy-path: target_project уходит в периметр, успех → onStarted (без тоста)", async () => {
     transferService.mockResolvedValue({
       project: "demo",
       name: "svc",
@@ -66,8 +67,9 @@ describe("TransferCard", () => {
       owners: [],
       owners_version: 0,
     });
+    const onStarted = vi.fn();
     const user = userEvent.setup();
-    renderCard();
+    renderCard("active", onStarted);
 
     await openAndConfirm(user);
 
@@ -76,7 +78,9 @@ describe("TransferCard", () => {
       { target_project: "demo2" },
       { params: { project: "demo", name: "svc" } },
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(/Перенос сервиса запущен/i);
+    // Ход и исход показывает единый степпер (onStarted), а не тост успеха.
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("отказ доступа (403) → тост с понятным сообщением", async () => {

@@ -1,6 +1,6 @@
 // Тесты карточки владельцев (ADR-0017): отображение состава; изменение через
-// модалку (Dialog) с формой react-hook-form + zod; результат и ошибки (409/403) —
-// через тосты.
+// модалку (Dialog) с формой react-hook-form + zod; успех поднимает единый
+// ступенчатый прогресс (onStarted), а не тост; ошибки (409/403) — через тосты.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,12 +16,18 @@ vi.mock("@/api", async (importOriginal) => {
   return { ...actual, apiClient: { setServiceOwners } };
 });
 
-function renderCard() {
+function renderCard(onStarted?: () => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <OwnersCard project="demo" name="svc" owners={["alice"]} ownersVersion={4} />
+        <OwnersCard
+          project="demo"
+          name="svc"
+          owners={["alice"]}
+          ownersVersion={4}
+          onStarted={onStarted}
+        />
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -43,10 +49,11 @@ describe("OwnersCard", () => {
     expect(screen.getByLabelText(/Текущие владельцы/i)).toHaveTextContent("alice");
   });
 
-  it("happy-path: нормализованный набор и версия уходят в периметр", async () => {
+  it("happy-path: нормализованный набор и версия уходят в периметр, успех → onStarted (без тоста)", async () => {
     setServiceOwners.mockResolvedValue({ owners: ["alice", "bob"], owners_version: 5 });
+    const onStarted = vi.fn();
     const user = userEvent.setup();
-    renderCard();
+    renderCard(onStarted);
 
     await user.click(screen.getByRole("button", { name: /Изменить владельцев/i }));
     const textarea = screen.getByLabelText(/Новый состав владельцев/i);
@@ -59,7 +66,9 @@ describe("OwnersCard", () => {
       { owners: ["alice", "bob"], owners_version: 4 },
       { params: { project: "demo", name: "svc" } },
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(/Состав владельцев обновлён/i);
+    // Успех поднимает единый ступенчатый прогресс (onStarted), а не тост успеха.
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("конфликт версии (409) → тост с понятным сообщением", async () => {

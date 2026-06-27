@@ -36,9 +36,12 @@ type Props = {
   name: string;
   owners: string[];
   ownersVersion: number;
+  // onStarted — вызывается после принятого запуска смены владельцев; страница
+  // поднимает единый ступенчатый прогресс (вместо тоста об успехе).
+  onStarted?: () => void;
 };
 
-export function OwnersCard({ project, name, owners, ownersVersion }: Props) {
+export function OwnersCard({ project, name, owners, ownersVersion, onStarted }: Props) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -60,8 +63,9 @@ export function OwnersCard({ project, name, owners, ownersVersion }: Props) {
         { params: { project, name } },
       ),
     onSuccess: () => {
-      toast.success("Состав владельцев обновлён.");
+      // Успех показываем не тостом, а единым ступенчатым прогрессом на странице.
       setOpen(false);
+      onStarted?.();
       void queryClient.invalidateQueries({ queryKey: ["service", project, name] });
     },
     onError: (err) =>

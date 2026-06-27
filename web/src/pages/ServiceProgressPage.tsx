@@ -1,47 +1,59 @@
-// Экран прогресса создания сервиса. Поллит статус через периметр
-// (GET /projects/{project}/services/{name}) с интервалом, пока статус не станет
-// терминальным (active/failed); затем опрос останавливается и показывается
-// исход. Каждый ответ валидируется zod в zodios-клиенте.
-import { useQuery } from "@tanstack/react-query";
+// Экран сервиса с ЕДИНЫМ ступенчатым прогрессом асинхронных операций (ADR-0022).
+// Поллит статус через периметр (хук useServiceStatus) до терминальной фазы и
+// показывает ОДИН компонент Stepper для текущей операции (создание / смена
+// владельцев / decommission / transfer). Активную операцию задают карточки через
+// onStarted; если её нет — операция и фаза выводятся из грубого статуса. Тосты в
+// карточках остаются только для синхронных ошибок запуска (ADR-0017).
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 
-import { apiClient } from "@/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { Stepper } from "@/components/ui/stepper";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { OwnersCard } from "@/components/OwnersCard";
 import { DecommissionCard } from "@/components/DecommissionCard";
 import { TransferCard } from "@/components/TransferCard";
+import { useServiceStatus } from "@/hooks/useServiceStatus";
+import {
+  buildSteps,
+  isProgressActive,
+  resolveProgress,
+  type ActiveOp,
+  type Operation,
+} from "@/lib/workflow-steps";
 
-// POLL_INTERVAL_MS — интервал поллинга статуса (см. design.md, стратегия).
-const POLL_INTERVAL_MS = 1500;
-
-// isTerminal — достигнут ли терминальный статус (опрос пора останавливать).
-// decommissioned также терминален: дальнейший поллинг не нужен.
-function isTerminal(status: string): boolean {
-  return status === "active" || status === "failed" || status === "decommissioned";
-}
-
-// apiGetService — обёртка над клиентом периметра для чтения статуса.
-function apiGetService(project: string, name: string) {
-  return apiClient.getService({ params: { project, name } });
-}
+// OPERATION_LABEL — заголовок прогресса по операции (для aria-label степпера).
+const OPERATION_LABEL: Record<Operation, string> = {
+  create: "Создание сервиса",
+  "change-owners": "Смена владельцев",
+  decommission: "Вывод из эксплуатации",
+  transfer: "Перенос сервиса",
+};
 
 export function ServiceProgressPage() {
   const { project = "", name = "" } = useParams();
 
-  const query = useQuery({
-    queryKey: ["service", project, name],
-    queryFn: () => apiGetService(project, name),
-    // Поллим, пока статус не терминальный; на терминале refetchInterval=false.
-    refetchInterval: (q) => {
-      const status = q.state.data?.status;
-      return status && isTerminal(status) ? false : POLL_INTERVAL_MS;
-    },
+  // activeOp — операция, запущенная пользователем на этой странице (карточки
+  // сообщают о запуске через onStarted). null — фаза выводится из статуса.
+  const [activeOp, setActiveOp] = useState<ActiveOp>(null);
+  // sawTransferring — наблюдался ли статус transferring (нужно, чтобы отличить
+  // «перенос завершён» (active после transferring) от «active до старта»).
+  const sawTransferring = useRef(false);
+
+  const { data, status, isLoading, isError } = useServiceStatus(project, name, {
+    // Поллим, пока фаза текущей операции не стала терминальной.
+    keepPolling: (d) =>
+      isProgressActive(resolveProgress(d, activeOp, sawTransferring.current)),
   });
 
-  const status = query.data?.status;
+  // Фиксируем факт наблюдавшегося transferring для разрешения фазы переноса.
+  useEffect(() => {
+    if (status === "transferring") sawTransferring.current = true;
+  }, [status]);
+
+  const progress = resolveProgress(data, activeOp, sawTransferring.current);
 
   return (
     <section className="flex flex-col gap-5">
@@ -62,72 +74,74 @@ export function ServiceProgressPage() {
       <Card>
         <CardContent className="flex flex-col gap-5 p-6">
           <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
-            {query.isLoading && (
+            {isLoading && (
               <span className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
+                <Loader2 className="size-4 motion-safe:animate-spin" />
                 Запрашиваем статус…
               </span>
             )}
-            {query.isError && (
+            {isError && (
               <span className="flex items-center gap-2 text-destructive">
                 <AlertTriangle className="size-4" />
                 Не удалось получить статус сервиса.
               </span>
             )}
-            {status === "creating" && (
-              <span className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Идёт создание — провизия GitLab, Harbor и Vault. Статус
-                обновляется автоматически.
-              </span>
-            )}
-            {status === "active" && (
-              <span className="flex items-center gap-2 text-success">
-                <CheckCircle2 className="size-4" />
-                Сервис создан и активен.
-              </span>
-            )}
-            {status === "failed" && (
-              <span className="flex items-center gap-2 text-destructive">
-                <XCircle className="size-4" />
-                Создание завершилось ошибкой — выполнен откат (Saga).
-              </span>
-            )}
-            {status === "decommissioned" && (
-              <span className="text-muted-foreground">
-                Сервис выведен из эксплуатации
-                {query.data?.decommissioned_at
-                  ? ` (${query.data.decommissioned_at})`
-                  : ""}
-                . Данные каталога сохранены.
-              </span>
+            {progress && (
+              <Stepper
+                steps={buildSteps(progress.operation, progress.phase)}
+                irreversible={progress.irreversible}
+                note={progress.note}
+                label={OPERATION_LABEL[progress.operation]}
+              />
             )}
           </div>
         </CardContent>
       </Card>
 
-      {/* Владельцы сервиса: отображение и форма изменения (доступны при наличии
-          данных сервиса; смена владельцев требует права change_owners). */}
-      {query.data && (
+      {/* Владельцы сервиса: отображение и форма изменения. Запуск смены владельцев
+          поднимает единый степпер (короткий воркфлоу) — базовая версия владельцев
+          фиксируется на момент запуска. */}
+      {data && (
         <OwnersCard
           project={project}
           name={name}
-          owners={query.data.owners}
-          ownersVersion={query.data.owners_version}
+          owners={data.owners}
+          ownersVersion={data.owners_version}
+          onStarted={() =>
+            setActiveOp({
+              operation: "change-owners",
+              ownersBaseline: data.owners_version,
+            })
+          }
         />
       )}
 
-      {/* Вывод сервиса из эксплуатации (soft delete): действие с подтверждением,
-          доступно только для активного сервиса (требует права decommission). */}
-      {query.data && (
-        <DecommissionCard project={project} name={name} status={query.data.status} />
+      {/* Вывод сервиса из эксплуатации (soft delete): запуск поднимает единый
+          степпер с пометкой точки невозврата. */}
+      {data && (
+        <DecommissionCard
+          project={project}
+          name={name}
+          status={data.status}
+          onStarted={() => {
+            sawTransferring.current = false;
+            setActiveOp({ operation: "decommission" });
+          }}
+        />
       )}
 
-      {/* Перенос сервиса в другой проект: действие с подтверждением и
-          предупреждением о необратимости, доступно только для активного сервиса
-          (требует прав transfer на исходном и transfer_in на целевом проекте). */}
-      {query.data && (
-        <TransferCard project={project} name={name} status={query.data.status} />
+      {/* Перенос сервиса в другой проект: запуск поднимает единый степпер с
+          пометкой точки невозврата. */}
+      {data && (
+        <TransferCard
+          project={project}
+          name={name}
+          status={data.status}
+          onStarted={() => {
+            sawTransferring.current = false;
+            setActiveOp({ operation: "transfer" });
+          }}
+        />
       )}
     </section>
   );
