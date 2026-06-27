@@ -58,6 +58,6 @@
 
 ## 9. Завершение
 
-- [ ] 9.1 Финальная сверка: `make test` (race+shuffle), `make lint`, `govulncheck`, `make gen` без диффа, `make lint-openapi`, web-test — зелёные
+- [x] 9.1 Финальная сверка: `make test` (race+shuffle), `make lint`, `govulncheck`, `make gen` без диффа, `make lint-openapi`, web-test — зелёные
 - [x] 9.2 Локально прогнать `make gitlab` и убедиться, что интеграционный набор проходит против реального GitLab
-- [ ] 9.3 Открыть PR с зелёным CI; после merge — `/opsx:archive` отдельным PR sync+archive (по образцу #55/#57)
+- [x] 9.3 Открыть PR с зелёным CI; после merge — `/opsx:archive` отдельным PR sync+archive (по образцу #55/#57)

@@ -235,3 +235,66 @@ gitlab: gitlab-up
 ## gitlab-logs: собрать логи стенда с реальным GitLab (диагностика).
 gitlab-logs:
 	$(COMPOSE_GITLAB) logs --no-color
+
+# === Интеграционные тесты воркфлоу против РЕАЛЬНОГО Vault (ADR-0020) ===
+# Прогон ТОЛЬКО локальный, ручной: реальный Vault — отдельный профиль, в CI не
+# поднимается (зеркалим gitlab-паттерн ради единой операционной модели, хотя сам
+# Vault лёгок и стартует за секунды). Стенд = базовая локалка + реальный OIDC
+# (e2e-override, чтобы переиспользовать харнесс tests/e2e через oauth2-proxy) +
+# реальный Vault (vault-override). GitLab/Harbor остаются моками. Готовность Vault
+# ждёт healthcheck compose и сам набор (requireVault), очистка — `down -v`.
+COMPOSE_VAULT := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.e2e.yml -f deploy/compose/docker-compose.vault.yml
+# Публикуемый адрес реального Vault для сидирования и ассертов набора через Vault API.
+VAULT_ADDR ?= http://localhost:8200
+# Dev root-токен (фикстура стенда): должен совпадать с VAULT_DEV_ROOT_TOKEN_ID/
+# VAULT_TOKEN в docker-compose.vault.yml.
+VAULT_TOKEN ?= idp-dev-root-token
+# Бюджет ожидания готовности Vault/воркфлоу. Vault стартует за секунды, поэтому
+# дефолт существенно меньше gitlab-бюджета (там 600s).
+VAULT_STATUS_TIMEOUT ?= 120s
+
+.PHONY: vault-up vault-seed vault-test vault-down vault vault-logs
+
+## vault-up: поднять стенд с реальным Vault (реальный OIDC + реальный Vault) в фоне,
+## дождаться готовности Vault и засеять его (vault-seed).
+vault-up: e2e-certs
+	$(COMPOSE_VAULT) up --build -d
+	@$(MAKE) vault-seed
+
+## vault-seed: дождаться готовности Vault и засеять детерминированно — включить
+## AppRole auth-движок и предзасеять секрет для transfer-теста по REST уже известным
+## dev root-токеном. Идемпотентно (повторный прогон безопасен).
+vault-seed:
+	@echo ">> ждём готовности Vault ($(VAULT_ADDR)); dev-старт — секунды ..."
+	@for i in $$(seq 1 30); do \
+		if curl -fsS $(VAULT_ADDR)/v1/sys/health >/dev/null 2>&1; then echo ">> Vault готов"; break; fi; \
+		sleep 2; \
+	done
+	@echo ">> сидируем approle/KV по REST ..."
+	@VAULT_ADDR="$(VAULT_ADDR)" VAULT_TOKEN="$(VAULT_TOKEN)" \
+		sh deploy/compose/vault-seed/seed.sh
+
+## vault-test: прогнать интеграционный набор против поднятого и засеянного стенда.
+## Токен — фиксированная фикстура VAULT_TOKEN (тот же dev root-токен).
+vault-test:
+	cd tests/e2e && \
+		E2E_PROXY_URL="$(E2E_PROXY_URL)" \
+		E2E_KEYCLOAK_URL="$(E2E_KEYCLOAK_URL)" \
+		E2E_STATUS_TIMEOUT="$(VAULT_STATUS_TIMEOUT)" \
+		VAULT_ADDR="$(VAULT_ADDR)" \
+		VAULT_TOKEN="$(VAULT_TOKEN)" \
+		VAULT_STATUS_TIMEOUT="$(VAULT_STATUS_TIMEOUT)" \
+		go test -tags=integration -count=1 -v ./...
+
+## vault-down: остановить стенд с реальным Vault и очистить тома.
+vault-down:
+	$(COMPOSE_VAULT) down -v
+
+## vault: полный локальный цикл — поднять стенд, прогнать набор, гарантированно
+## погасить стенд (очистка выполняется даже при падении тестов).
+vault: vault-up
+	@$(MAKE) vault-test; rc=$$?; $(MAKE) vault-down; exit $$rc
+
+## vault-logs: собрать логи стенда с реальным Vault (диагностика).
+vault-logs:
+	$(COMPOSE_VAULT) logs --no-color
