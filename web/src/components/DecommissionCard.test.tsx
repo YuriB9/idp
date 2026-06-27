@@ -17,12 +17,12 @@ vi.mock("@/api", async (importOriginal) => {
   return { ...actual, apiClient: { decommissionService } };
 });
 
-function renderCard(status = "active") {
+function renderCard(status = "active", onStarted?: () => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <ToastProvider>
-        <DecommissionCard project="demo" name="svc" status={status} />
+        <DecommissionCard project="demo" name="svc" status={status} onStarted={onStarted} />
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -61,7 +61,7 @@ describe("DecommissionCard", () => {
     expect(screen.getByRole("button", { name: /^Вывести$/i })).toBeDisabled();
   });
 
-  it("happy-path: load_drained уходит в периметр после подтверждения", async () => {
+  it("happy-path: load_drained уходит в периметр, успех → onStarted (без тоста)", async () => {
     decommissionService.mockResolvedValue({
       project: "demo",
       name: "svc",
@@ -69,8 +69,9 @@ describe("DecommissionCard", () => {
       owners: [],
       owners_version: 0,
     });
+    const onStarted = vi.fn();
     const user = userEvent.setup();
-    renderCard();
+    renderCard("active", onStarted);
 
     await openAndConfirm(user);
 
@@ -79,7 +80,9 @@ describe("DecommissionCard", () => {
       { load_drained: true },
       { params: { project: "demo", name: "svc" } },
     );
-    expect(await screen.findByRole("status")).toHaveTextContent(/выведен из эксплуатации/i);
+    // Ход и исход показывает единый степпер (onStarted), а не тост успеха.
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("предусловие не выполнено (422) → тост с понятным сообщением", async () => {

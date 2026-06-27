@@ -19,9 +19,12 @@ type Props = {
   project: string;
   name: string;
   status: string;
+  // onStarted — вызывается после принятого запуска переноса; страница поднимает
+  // единый ступенчатый прогресс (вместо тоста об успехе).
+  onStarted?: () => void;
 };
 
-export function TransferCard({ project, name, status }: Props) {
+export function TransferCard({ project, name, status, onStarted }: Props) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -39,10 +42,11 @@ export function TransferCard({ project, name, status }: Props) {
         { params: { project, name } },
       ),
     onSuccess: () => {
-      toast.success("Перенос сервиса запущен.");
+      // Ход и исход показываем не тостом, а единым ступенчатым прогрессом.
       setOpen(false);
       setTargetProject("");
       setConfirmName("");
+      onStarted?.();
       void queryClient.invalidateQueries({ queryKey: ["service", project, name] });
     },
     onError: (err) =>
