@@ -49,4 +49,4 @@
 - [x] 8.1 Прогнать дефолтный путь зелёным: `go test` всех модулей `-race -shuffle`, golangci-lint (учесть gosec G101!), govulncheck, `gen:check` (контракт+кодоген БЕЗ изменений), openapi-lint, web-test
 - [ ] 8.2 Локально прогнать `make harbor` (up → seed → integration-набор → down) против реального Harbor; подтвердить ассерты создания/decommission/transfer
 - [x] 8.3 Подтвердить, что `make e2e`, `make gitlab` и `make vault` не затронуты (мок-путь и gitlab/vault-профили работают)
-- [ ] 8.4 Открыть PR с ветки `change/devinfra-real-harbor`; добиться зелёного CI; после merge — отдельный PR `/opsx:archive` (sync+archive по образцу #59/#67)
+- [x] 8.4 Открыть PR с ветки `change/devinfra-real-harbor`; добиться зелёного CI; после merge — отдельный PR `/opsx:archive` (sync+archive по образцу #59/#67)
