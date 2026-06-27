@@ -1,0 +1,56 @@
+# Override-профиль: РЕАЛЬНЫЙ HashiCorp Vault (dev-режим) вместо WireMock-мока для
+# DevInfra worker (ADR-0020). Подключается ПОВЕРХ базовой локалки и e2e-override
+# (чтобы переиспользовать харнесс tests/e2e через реальный OIDC), но НЕ входит в
+# дефолтный `docker compose up`. В отличие от GitLab образ Vault лёгкий и стартует
+# за секунды — но операционная модель зеркалит gitlab-профиль: отдельный профиль,
+# локальный ручной прогон (см. Makefile цели vault-up/vault-seed/vault-test/
+# vault-down). GitLab и Harbor ОСТАЮТСЯ моками (граница MVP).
+#
+# Сидирование (см. Makefile цель vault-seed): после готовности Vault Makefile
+# включает AppRole auth-движок и (опц.) предзасевает секрет для transfer-теста по
+# REST уже известным dev root-токеном (vault-seed/seed.sh). KV v2 на secret/ —
+# дефолт dev-режима, монтировать не нужно.
+#
+# Базовая локалка (docker-compose.yml), e2e-override (docker-compose.e2e.yml) и
+# gitlab-профиль (docker-compose.gitlab.yml) этот файл НЕ затрагивают: они не
+# ссылаются на сервис vault и не задают воркеру VAULT_TOKEN, поэтому продолжают
+# ходить к mock-vault.
+name: idp
+
+services:
+  # Реальный Vault в dev-режиме. Пиннут по тегу версии для воспроизводимости.
+  # VAULT_DEV_ROOT_TOKEN_ID — детерминированный root-токен (фикстура стенда, не
+  # секрет прода); тем же значением аутентифицируется devinfra-worker и сид.
+  # IPC_LOCK — чтобы Vault мог mlock память (стандартное требование образа).
+  vault:
+    image: hashicorp/vault:1.16.0
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "idp-dev-root-token"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      # Адрес для CLI внутри контейнера (healthcheck использует `vault status`).
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      # `vault status` выходит с 0 при распечатанном (unsealed) хранилище; в
+      # dev-режиме оно авто-unseal, поэтому проба зеленеет почти сразу.
+      test: ["CMD", "vault", "status"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    ports:
+      - "8200:8200"
+
+  # Переключаем worker на реальный Vault: базовый URL → http://vault:8200, токен —
+  # фиксированная фикстура (тот же dev root-токен). SSRF_DISABLED=true: Vault на
+  # приватном http-адресе стенда (в проде guard включён). GitLab/Harbor — моки.
+  devinfra-worker:
+    environment:
+      VAULT_BASE_URL: "http://vault:8200"
+      # Должен совпадать с VAULT_DEV_ROOT_TOKEN_ID сервиса vault и VAULT_TOKEN в Makefile.
+      VAULT_TOKEN: "idp-dev-root-token"
+      SSRF_DISABLED: "true"
+    depends_on:
+      vault:
+        condition: service_healthy

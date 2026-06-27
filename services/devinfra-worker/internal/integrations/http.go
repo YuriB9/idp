@@ -19,6 +19,11 @@ import (
 // gitLabTokenHeader — заголовок аутентификации реального GitLab (PAT/PRIVATE-TOKEN).
 const gitLabTokenHeader = "PRIVATE-TOKEN"
 
+// vaultTokenHeader — заголовок аутентификации реального Vault (статический dev
+// root-токен — фикстура стенда, ADR-0020). Ставится ТОЛЬКО на Vault-запросах и не
+// протекает на GitLab/Harbor (у каждой интеграции свой doer).
+const vaultTokenHeader = "X-Vault-Token"
+
 // Config конфигурирует HTTP-клиентов интеграций.
 type Config struct {
 	// Базовые URL управляемых систем.
@@ -34,6 +39,11 @@ type Config struct {
 	// (фикстура стенда). Пустое отображение для владельца → синхронизация участника
 	// безопасно пропускается (членство в репозитории не обязательно для happy-path).
 	GitLabOwnerLogins map[string]string
+	// VaultToken — токен аутентификации к реальному Vault (X-Vault-Token). Пусто для
+	// прогона против WireMock-мока (мок не требует токена). Значение не логируется.
+	// Наличие токена включает семантику реального Vault API (накопительный отзыв
+	// secret-id через accessors вместо мок-эндпоинта destroy-all), см. ADR-0020.
+	VaultToken string
 	// Guarded включает SSRF-guard (ValidateURL + GuardedDialContext). В локалке с
 	// http-моками выключается явным флагом (аналог AUTH_DISABLED); в проде —
 	// всегда true (https + публичные адреса).
@@ -68,6 +78,13 @@ func NewHTTPClients(cfg Config) (*Clients, error) {
 	if cfg.GitLabToken != "" {
 		gitlabDoer = &doer{hc: hc, headers: map[string]string{gitLabTokenHeader: cfg.GitLabToken}}
 	}
+	// Vault-запросы к реальному Vault несут X-Vault-Token. Отдельный doer, чтобы
+	// заголовок аутентификации не протекал в запросы GitLab/Harbor. Без токена
+	// (прогон против мока) — общий doer без заголовка.
+	vaultDoer := sharedDoer
+	if cfg.VaultToken != "" {
+		vaultDoer = &doer{hc: hc, headers: map[string]string{vaultTokenHeader: cfg.VaultToken}}
+	}
 	return &Clients{
 		GitLab: &gitLabHTTP{
 			doer:        gitlabDoer,
@@ -77,7 +94,11 @@ func NewHTTPClients(cfg Config) (*Clients, error) {
 			groupIDs:    map[string]int{},
 		},
 		Harbor: &harborHTTP{doer: sharedDoer, base: strings.TrimRight(cfg.HarborBaseURL, "/")},
-		Vault:  &vaultHTTP{doer: sharedDoer, base: strings.TrimRight(cfg.VaultBaseURL, "/")},
+		Vault: &vaultHTTP{
+			doer: vaultDoer,
+			base: strings.TrimRight(cfg.VaultBaseURL, "/"),
+			real: cfg.VaultToken != "",
+		},
 	}, nil
 }
 
@@ -508,6 +529,12 @@ func (c *harborHTTP) UpdateMetadata(ctx context.Context, ref provisioning.Resour
 type vaultHTTP struct {
 	doer *doer
 	base string
+	// real включает семантику РЕАЛЬНОГО Vault API. Сейчас расходится с моком только
+	// немедленный отзыв (RevokeSecretID): у реального Vault нет destroy-all одним
+	// вызовом — нужно перечислить активные secret-id-accessors и уничтожить каждый
+	// (ADR-0020). false → прогон против WireMock-мока со старым эндпоинтом (БЛОК 7).
+	// Остальные пути/тела/коды (KV v2, AppRole, identity) совпадают с реальным Vault.
+	real bool
 }
 
 func (c *vaultHTTP) SetupAppRole(ctx context.Context, ref provisioning.ResourceRef) (provisioning.VaultResult, error) {
@@ -557,13 +584,17 @@ func (c *vaultHTTP) TeardownAppRole(ctx context.Context, ref provisioning.Resour
 }
 
 func (c *vaultHTTP) SyncOwners(ctx context.Context, ref provisioning.ResourceRef, add, remove []string) error {
-	// Идемпотентность: PUT entity-alias на каждого добавленного владельца (409 —
-	// успех), DELETE на каждого удалённого (404 — успех). В моке достаточно имени.
+	// Идемпотентность по кодам Vault: PUT identity-entity на каждого добавленного
+	// владельца — upsert (200/204, не 409), DELETE на каждого удалённого (реальный
+	// Vault на отсутствующего отвечает 204, мок — 204; 404 принимаем как успех
+	// дополнительно). Имя entity несёт субъект напрямую (<role>-<subject>), привязка
+	// alias с mount_accessor — вне границы MVP (ADR-0020), для ассерта достаточно
+	// существования entity с политикой роли.
 	role := ref.Project + "-" + ref.Name
 	for _, user := range add {
 		url := fmt.Sprintf("%s/v1/identity/entity/name/%s-%s", c.base, role, user)
 		body := map[string]any{"policies": []string{role}}
-		if err := c.doer.call(ctx, http.MethodPut, url, body, nil, http.StatusConflict); err != nil {
+		if err := c.doer.call(ctx, http.MethodPut, url, body, nil); err != nil {
 			return err
 		}
 	}
@@ -582,11 +613,40 @@ func (c *vaultHTTP) RestoreOwners(ctx context.Context, ref provisioning.Resource
 }
 
 func (c *vaultHTTP) RevokeSecretID(ctx context.Context, ref provisioning.ResourceRef) error {
-	// Отзыв всех активных SecretID AppRole — немедленное прекращение доступа
-	// (идемпотентно: 404 — успех). Необратимо: отозванный SecretID не вернуть.
+	// Отзыв всех активных SecretID AppRole — немедленное прекращение доступа.
+	// Необратимо: отозванный SecretID не вернуть (точка невозврата, ADR-0012).
 	role := ref.Project + "-" + ref.Name
-	url := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id/destroy", c.base, role)
-	return c.doer.call(ctx, http.MethodPost, url, map[string]string{}, nil, http.StatusNotFound)
+	if !c.real {
+		// Мок: единый эндпоинт destroy-all с пустым телом (204; 404 — успех).
+		url := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id/destroy", c.base, role)
+		return c.doer.call(ctx, http.MethodPost, url, map[string]string{}, nil, http.StatusNotFound)
+	}
+	// Реальный Vault: destroy-all одним вызовом НЕТ (пустое тело → 400). Перечисляем
+	// активные secret-id-accessors (GET ?list=true: data.keys; пустой набор → 404) и
+	// уничтожаем каждый через secret-id-accessor/destroy. Идемпотентно: отсутствие
+	// активных secret-id (404) трактуем как успех (no-op). Результат наблюдаем —
+	// после отзыва повторный list пуст.
+	var listed struct {
+		Data struct {
+			Keys []string `json:"keys"`
+		} `json:"data"`
+	}
+	listURL := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id?list=true", c.base, role)
+	found, err := c.doer.getFound(ctx, listURL, &listed)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil // активных secret-id нет — отзывать нечего (no-op-успех)
+	}
+	destroyURL := fmt.Sprintf("%s/v1/auth/approle/role/%s/secret-id-accessor/destroy", c.base, role)
+	for _, accessor := range listed.Data.Keys {
+		body := map[string]string{"secret_id_accessor": accessor}
+		if err := c.doer.call(ctx, http.MethodPost, destroyURL, body, nil, http.StatusNotFound); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *vaultHTTP) MigratePaths(ctx context.Context, ref provisioning.ResourceRef, target string) error {
