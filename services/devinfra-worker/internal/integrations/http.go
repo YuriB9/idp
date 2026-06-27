@@ -22,7 +22,7 @@ const gitLabTokenHeader = "PRIVATE-TOKEN"
 // vaultTokenHeader — заголовок аутентификации реального Vault (статический dev
 // root-токен — фикстура стенда, ADR-0020). Ставится ТОЛЬКО на Vault-запросах и не
 // протекает на GitLab/Harbor (у каждой интеграции свой doer).
-const vaultTokenHeader = "X-Vault-Token"
+const vaultTokenHeader = "X-Vault-Token" //nolint:gosec // G101: имя HTTP-заголовка, не секрет
 
 // Config конфигурирует HTTP-клиентов интеграций.
 type Config struct {
