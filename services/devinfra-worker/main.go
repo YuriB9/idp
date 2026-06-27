@@ -98,6 +98,21 @@ func vaultToken() (string, error) {
 	return tokenFromEnv("VAULT_TOKEN", "VAULT_TOKEN_FILE")
 }
 
+// harborCreds возвращает креденшелы HTTP Basic к Harbor: логин HARBOR_USERNAME и пароль
+// HARBOR_PASSWORD (либо, если он пуст, содержимое файла HARBOR_PASSWORD_FILE — секрет
+// тогда не светится в env). По образцу gitLabToken/vaultToken (ADR-0021): на тест-стенде
+// это admin/Harbor12345 — фикстура стенда. Реальный Harbor-клиент включается лишь когда
+// заданы ОБА (логин и пароль); иначе клиент работает против WireMock-мока. Пароль не
+// логируется.
+func harborCreds() (user, pass string, err error) {
+	user = strings.TrimSpace(config.String("HARBOR_USERNAME", ""))
+	pass, err = tokenFromEnv("HARBOR_PASSWORD", "HARBOR_PASSWORD_FILE")
+	if err != nil {
+		return "", "", err
+	}
+	return user, pass, nil
+}
+
 // tokenFromEnv читает секрет из env-переменной tokenEnv, либо (если она пуста) из
 // файла по пути в fileEnv — секрет тогда не светится в env и подаётся через
 // смонтированный файл/том. Пусто → возвращает пустую строку (клиент идёт к моку).
@@ -156,17 +171,22 @@ func run() error {
 		return err
 	}
 	guarded := !ssrfDisabled
-	// Выбор реализации клиентов по наличию токена. GitLab: при GITLAB_TOKEN(_FILE)
+	// Выбор реализации клиентов по наличию креденшелов. GitLab: при GITLAB_TOKEN(_FILE)
 	// — клиент против РЕАЛЬНОГО GitLab (PRIVATE-TOKEN + резолвинг namespace→group_id
 	// и владелец→user_id, ADR-0019). Vault: при VAULT_TOKEN(_FILE) — клиент против
-	// РЕАЛЬНОГО Vault (X-Vault-Token + накопительный отзыв secret-id, ADR-0020).
+	// РЕАЛЬНОГО Vault (X-Vault-Token + накопительный отзыв secret-id, ADR-0020). Harbor:
+	// при HARBOR_USERNAME + HARBOR_PASSWORD(_FILE) — клиент против РЕАЛЬНОГО Harbor (HTTP
+	// Basic + system-robots с резолвингом id, read-only через отзыв robot, ADR-0021).
 	// Иначе по каждому плечу — поведение по умолчанию (клиент против WireMock-мока).
-	// Harbor всегда мок (граница MVP).
 	gitlabToken, err := gitLabToken()
 	if err != nil {
 		return err
 	}
 	vaultTok, err := vaultToken()
+	if err != nil {
+		return err
+	}
+	harborUser, harborPass, err := harborCreds()
 	if err != nil {
 		return err
 	}
@@ -177,6 +197,8 @@ func run() error {
 		GitLabToken:       gitlabToken,
 		GitLabOwnerLogins: parseOwnerLogins(config.String("GITLAB_OWNER_LOGINS", "")),
 		VaultToken:        vaultTok,
+		HarborUsername:    harborUser,
+		HarborPassword:    harborPass,
 		Guarded:           guarded,
 	})
 	if err != nil {

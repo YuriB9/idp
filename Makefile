@@ -298,3 +298,69 @@ vault: vault-up
 ## vault-logs: собрать логи стенда с реальным Vault (диагностика).
 vault-logs:
 	$(COMPOSE_VAULT) logs --no-color
+
+# === Интеграционные тесты воркфлоу против РЕАЛЬНОГО Harbor (ADR-0021) ===
+# Прогон ТОЛЬКО локальный, ручной: реальный Harbor — отдельный профиль, в CI не
+# поднимается (Harbor тяжёлый — связка контейнеров, зеркалим gitlab-паттерн). В отличие
+# от GitLab/Vault, Harbor поднимается ОТДЕЛЬНЫМ compose-проектом из официального
+# installer-bundle (deploy/compose/harbor/up.sh|down.sh), а IDP-стек лишь переключает
+# worker на него (docker-compose.harbor.yml). Стенд = базовая локалка + реальный OIDC
+# (e2e-override, харнесс tests/e2e) + реальный Harbor. GitLab/Vault остаются моками.
+# Готовность Harbor ждёт harbor-seed (/api/v2.0/health) и сам набор (requireHarbor).
+COMPOSE_HARBOR := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.e2e.yml -f deploy/compose/docker-compose.harbor.yml
+# Публикуемый адрес реального Harbor для сидирования и ассертов набора через Harbor API.
+HARBOR_ADDR ?= http://localhost:8085
+# Креденшелы admin (фикстура стенда): должны совпадать с harbor_admin_password в
+# deploy/compose/harbor/harbor.yml и HARBOR_USERNAME/HARBOR_PASSWORD в docker-compose.harbor.yml.
+HARBOR_USERNAME ?= admin
+HARBOR_PASSWORD ?= Harbor12345
+# Пиннутая версия Harbor (installer-bundle); должна совпадать с дефолтом up.sh.
+HARBOR_VERSION ?= v2.14.4
+# Бюджет ожидания готовности Harbor/воркфлоу. Harbor тяжёлый — соразмерно gitlab (600s),
+# не vault. Duration-строка для go test; harbor-seed получает число секунд отдельно.
+HARBOR_STATUS_TIMEOUT ?= 600s
+
+.PHONY: harbor-up harbor-seed harbor-test harbor-down harbor harbor-logs
+
+## harbor-up: поднять стенд с реальным Harbor — связку контейнеров Harbor отдельным
+## compose-проектом (up.sh) и IDP-стек с переключением worker'а на Harbor; затем
+## дождаться готовности (harbor-seed).
+harbor-up: e2e-certs
+	HARBOR_VERSION="$(HARBOR_VERSION)" sh deploy/compose/harbor/up.sh
+	$(COMPOSE_HARBOR) up --build -d
+	@$(MAKE) harbor-seed
+
+## harbor-seed: дождаться готовности Harbor (/api/v2.0/health) и подтвердить admin-доступ
+## по HTTP Basic (фикстура стенда). Per-service проекты/robot создаёт сам воркфлоу.
+harbor-seed:
+	@echo ">> ждём готовности Harbor ($(HARBOR_ADDR)); связка контейнеров стартует не быстро ..."
+	@HARBOR_ADDR="$(HARBOR_ADDR)" HARBOR_USERNAME="$(HARBOR_USERNAME)" HARBOR_PASSWORD="$(HARBOR_PASSWORD)" \
+		HARBOR_SEED_TIMEOUT="600" \
+		sh deploy/compose/harbor-seed/seed.sh
+
+## harbor-test: прогнать интеграционный набор против поднятого и засеянного стенда.
+## Креденшелы — фиксированные фикстуры (admin/Harbor12345).
+harbor-test:
+	cd tests/e2e && \
+		E2E_PROXY_URL="$(E2E_PROXY_URL)" \
+		E2E_KEYCLOAK_URL="$(E2E_KEYCLOAK_URL)" \
+		E2E_STATUS_TIMEOUT="$(HARBOR_STATUS_TIMEOUT)" \
+		HARBOR_ADDR="$(HARBOR_ADDR)" \
+		HARBOR_USERNAME="$(HARBOR_USERNAME)" \
+		HARBOR_PASSWORD="$(HARBOR_PASSWORD)" \
+		HARBOR_STATUS_TIMEOUT="$(HARBOR_STATUS_TIMEOUT)" \
+		go test -tags=integration -count=1 -v ./...
+
+## harbor-down: остановить IDP-стек и связку Harbor, очистить тома/данные.
+harbor-down:
+	$(COMPOSE_HARBOR) down -v
+	sh deploy/compose/harbor/down.sh
+
+## harbor: полный локальный цикл — поднять стенд, прогнать набор, гарантированно
+## погасить стенд (очистка выполняется даже при падении тестов).
+harbor: harbor-up
+	@$(MAKE) harbor-test; rc=$$?; $(MAKE) harbor-down; exit $$rc
+
+## harbor-logs: собрать логи IDP-стека профиля Harbor (диагностика).
+harbor-logs:
+	$(COMPOSE_HARBOR) logs --no-color

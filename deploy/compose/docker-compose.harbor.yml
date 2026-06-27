@@ -1,0 +1,29 @@
+# Override-профиль: РЕАЛЬНЫЙ Harbor вместо WireMock-мока для DevInfra worker (ADR-0021).
+# Подключается ПОВЕРХ базовой локалки и e2e-override (чтобы переиспользовать харнесс
+# tests/e2e через реальный OIDC), но НЕ входит в дефолтный `docker compose up`.
+#
+# В отличие от GitLab/Vault, Harbor — связка контейнеров (core+db+redis+registry+
+# jobservice+portal+nginx), разворачиваемая из официального installer-bundle через
+# prepare (см. deploy/compose/harbor/up.sh). Поэтому сам Harbor поднимается ОТДЕЛЬНЫМ
+# compose-проектом (harbor-real) на опубликованном порту, а этот override лишь
+# ПЕРЕКЛЮЧАЕТ worker на него: HARBOR_BASE_URL → host.docker.internal:8085 (worker в сети
+# IDP достаёт хост-порт Harbor), HTTP Basic admin (фикстура), SSRF_DISABLED=true (Harbor
+# на приватном http-адресе стенда; в проде guard включён). GitLab/Vault — моки.
+#
+# Базовая локалка (docker-compose.yml), e2e-override (docker-compose.e2e.yml),
+# gitlab-профиль и vault-профиль этот файл НЕ затрагивают: они не задают воркеру
+# HARBOR_USERNAME/HARBOR_PASSWORD, поэтому продолжают ходить к mock-harbor.
+name: idp
+
+services:
+  # Переключаем worker на реальный Harbor. Креденшелы — фиксированная фикстура (admin/
+  # Harbor12345), та же, что HARBOR_ADMIN_PASSWORD стенда и HARBOR_PASSWORD в Makefile.
+  # extra_hosts даёт worker'у доступ к опубликованному на хосте порту Harbor.
+  devinfra-worker:
+    environment:
+      HARBOR_BASE_URL: "http://host.docker.internal:8085"
+      HARBOR_USERNAME: "admin"
+      HARBOR_PASSWORD: "Harbor12345"
+      SSRF_DISABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
