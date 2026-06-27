@@ -1,0 +1,82 @@
+# Закоммиченная конфигурация РЕАЛЬНОГО Harbor для интеграционного стенда (ADR-0021).
+# Источник истины профиля: официальный installer-bundle Harbor генерирует стек из этого
+# файла (goharbor/prepare). HTTP-only (стенд на приватном адресе, без TLS); admin-пароль —
+# фикстура стенда. Плейсхолдер __DATA_VOLUME__ подставляет up.sh (абсолютный путь рабочего
+# каталога стенда). НЕ для прода: продовый Harbor/HA/TLS/Trivy вне границы MVP.
+
+# Хост доступа к API/реестру. Для стенда — localhost (worker ходит через
+# host.docker.internal на опубликованный порт).
+hostname: localhost
+
+# HTTP-порт стенда (публикуется на хост; worker → host.docker.internal:8085).
+http:
+  port: 8085
+
+# Начальный пароль admin (фикстура стенда; тем же значением аутентифицируется
+# devinfra-worker через HTTP Basic — HARBOR_PASSWORD).
+harbor_admin_password: Harbor12345
+
+# Конфигурация БД Harbor (внутренний postgres стека).
+database:
+  password: root123
+  max_idle_conns: 100
+  max_open_conns: 900
+  conn_max_lifetime: 5m
+  conn_max_idle_time: 0
+
+# Каталог данных стенда (подставляется up.sh — абсолютный путь .work/data).
+data_volume: __DATA_VOLUME__
+
+# Trivy-сканер не используется (push/pull образов и сканирование вне границы MVP),
+# но секция требуется prepare.
+trivy:
+  ignore_unfixed: false
+  skip_update: false
+  skip_java_db_update: false
+  offline_scan: false
+  security_check: vuln
+  insecure: false
+  timeout: 5m0s
+
+jobservice:
+  max_job_workers: 10
+  max_job_duration_hours: 24
+  job_loggers:
+    - STD_OUTPUT
+    - FILE
+  logger_sweeper_duration: 1
+
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 3
+
+# Логи компонентов — в локальное хранилище (драйвер docker-логов в стеке переключается
+# up.sh на json-file, чтобы не тянуть хрупкий syslog-контейнер harbor-log).
+log:
+  level: info
+  local:
+    rotate_count: 50
+    rotate_size: 200M
+    location: /var/log/harbor
+
+# Версия формата конфига (нужна мигратору prepare; НЕ менять вручную).
+_version: 2.14.0
+
+proxy:
+  http_proxy:
+  https_proxy:
+  no_proxy:
+  components:
+    - core
+    - jobservice
+    - trivy
+
+upload_purging:
+  enabled: true
+  age: 168h
+  interval: 24h
+  dryrun: false
+
+cache:
+  enabled: false
+  expire_hours: 24

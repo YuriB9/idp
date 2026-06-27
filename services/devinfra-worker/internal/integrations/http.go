@@ -3,6 +3,7 @@ package integrations
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,12 @@ const gitLabTokenHeader = "PRIVATE-TOKEN"
 // протекает на GitLab/Harbor (у каждой интеграции свой doer).
 const vaultTokenHeader = "X-Vault-Token" //nolint:gosec // G101: имя HTTP-заголовка, не секрет
 
+// harborAuthHeader — заголовок аутентификации реального Harbor v2.0 API. Harbor
+// использует HTTP Basic (admin) — `Authorization: Basic base64(user:pass)`, а не
+// кастомный заголовок-токен (эмпирически: no-auth запись → 401, см. ADR-0021).
+// Ставится ТОЛЬКО на Harbor-запросах и не протекает на GitLab/Vault (свой doer).
+const harborAuthHeader = "Authorization" //nolint:gosec // G101: имя HTTP-заголовка, не секрет
+
 // Config конфигурирует HTTP-клиентов интеграций.
 type Config struct {
 	// Базовые URL управляемых систем.
@@ -44,6 +51,13 @@ type Config struct {
 	// Наличие токена включает семантику реального Vault API (накопительный отзыв
 	// secret-id через accessors вместо мок-эндпоинта destroy-all), см. ADR-0020.
 	VaultToken string
+	// HarborUsername/HarborPassword — креденшелы HTTP Basic к реальному Harbor (admin —
+	// фикстура стенда). Оба пусты для прогона против WireMock-мока (мок не требует auth).
+	// Пароль не логируется. Наличие обоих включает семантику реального Harbor v2.0 API
+	// (Basic auth, robots на уровне system с резолвингом id по имени, read-only через
+	// отзыв robot вместо несуществующего project.read_only), см. ADR-0021.
+	HarborUsername string
+	HarborPassword string
 	// Guarded включает SSRF-guard (ValidateURL + GuardedDialContext). В локалке с
 	// http-моками выключается явным флагом (аналог AUTH_DISABLED); в проде —
 	// всегда true (https + публичные адреса).
@@ -85,6 +99,15 @@ func NewHTTPClients(cfg Config) (*Clients, error) {
 	if cfg.VaultToken != "" {
 		vaultDoer = &doer{hc: hc, headers: map[string]string{vaultTokenHeader: cfg.VaultToken}}
 	}
+	// Harbor-запросы к реальному Harbor несут HTTP Basic admin. Отдельный doer, чтобы
+	// заголовок Authorization не протекал в запросы GitLab/Vault. Без креденшелов
+	// (прогон против мока) — общий doer без заголовка.
+	harborReal := cfg.HarborUsername != "" && cfg.HarborPassword != ""
+	harborDoer := sharedDoer
+	if harborReal {
+		basic := base64.StdEncoding.EncodeToString([]byte(cfg.HarborUsername + ":" + cfg.HarborPassword))
+		harborDoer = &doer{hc: hc, headers: map[string]string{harborAuthHeader: "Basic " + basic}}
+	}
 	return &Clients{
 		GitLab: &gitLabHTTP{
 			doer:        gitlabDoer,
@@ -93,7 +116,11 @@ func NewHTTPClients(cfg Config) (*Clients, error) {
 			ownerLogins: cfg.GitLabOwnerLogins,
 			groupIDs:    map[string]int{},
 		},
-		Harbor: &harborHTTP{doer: sharedDoer, base: strings.TrimRight(cfg.HarborBaseURL, "/")},
+		Harbor: &harborHTTP{
+			doer: harborDoer,
+			base: strings.TrimRight(cfg.HarborBaseURL, "/"),
+			real: harborReal,
+		},
 		Vault: &vaultHTTP{
 			doer: vaultDoer,
 			base: strings.TrimRight(cfg.VaultBaseURL, "/"),
@@ -462,65 +489,182 @@ func (c *gitLabHTTP) TransferRepo(ctx context.Context, ref provisioning.Resource
 
 // --- Harbor ---
 
+// harborTransferMarkerField — допустимое наблюдаемое поле метаданных проекта Harbor,
+// используемое как маркер переноса (transfer, ADR-0013). Harbor НЕ умеет
+// rename/transfer проекта и молча игнорирует произвольные ключи метаданных (эмпирически
+// `owner_project` не сохраняется), поэтому перенос на Harbor-плече наблюдается через
+// допустимое поле `auto_scan` (см. ADR-0021/empirical-harbor-api).
+const harborTransferMarkerField = "auto_scan"
+
 type harborHTTP struct {
 	doer *doer
 	base string
+	// real включает семантику РЕАЛЬНОГО Harbor v2.0 API (см. ADR-0021, эмпирически):
+	// robots создаются на уровне `system` (project-level robots НЕ перечисляются Harbor,
+	// их id не резолвится по имени) со scope на проект через permissions[]; удаление/отзыв
+	// robot — по ЧИСЛОВОМУ id (резолвинг по имени через GET /robots?q=name=); read-only —
+	// отзыв robot (нет project.read_only); тело POST /robots v2.0 (level/permissions/
+	// duration). false → прогон против WireMock-мока со старой формой запросов (БЛОК 7).
+	real bool
+}
+
+// harborRobotReqName — детерминированное ЗАПРОШЕННОЕ имя robot-аккаунта (без префикса
+// `robot$`, который Harbor добавляет сам). Совпадает с именем проекта (`<project>-<name>`)
+// и используется как ключ резолвинга id через GET /robots?q=name=<это-имя>.
+func harborRobotReqName(ref provisioning.ResourceRef) string { return ref.Project + "-" + ref.Name }
+
+// harborRobotBody собирает тело POST /api/v2.0/robots v2.0 для system-робота со scope на
+// проект projName: push/pull в репозитории проекта, бессрочно (duration=-1). Минимальное
+// тело (`{name,level}`) реальный Harbor отвергает 400 («duration must be …»).
+func harborRobotBody(reqName, projName string) map[string]any {
+	return map[string]any{
+		"name":     reqName,
+		"duration": -1,
+		"level":    "system",
+		"permissions": []map[string]any{{
+			"kind":      "project",
+			"namespace": projName,
+			"access": []map[string]string{
+				{"resource": "repository", "action": "push"},
+				{"resource": "repository", "action": "pull"},
+			},
+		}},
+	}
+}
+
+// resolveRobotID резолвит числовой id system-робота по ЗАПРОШЕННОМУ имени через
+// GET /api/v2.0/robots?q=name=<reqName>. Возвращает (0, false, nil), если робот не найден
+// (отозван/не создан) — вызывающий трактует это как идемпотентный no-op. Только реальный
+// Harbor: project-level robots не перечислимы, поэтому робот создаётся на уровне system.
+func (c *harborHTTP) resolveRobotID(ctx context.Context, reqName string) (int, bool, error) {
+	var robots []struct {
+		ID int `json:"id"`
+	}
+	url := fmt.Sprintf("%s/api/v2.0/robots?q=name=%s", c.base, reqName)
+	if _, err := c.doer.getFound(ctx, url, &robots); err != nil {
+		return 0, false, err
+	}
+	if len(robots) == 0 || robots[0].ID == 0 {
+		return 0, false, nil
+	}
+	return robots[0].ID, true, nil
 }
 
 func (c *harborHTTP) CreateProject(ctx context.Context, ref provisioning.ResourceRef) (provisioning.HarborResult, error) {
 	projName := ref.Project + "-" + ref.Name
+	// Создание проекта (повтор → 409 идемпотентно; совпадает у мока и реального Harbor).
 	if err := c.doer.call(ctx, http.MethodPost, c.base+"/api/v2.0/projects",
 		map[string]string{"project_name": projName}, nil, http.StatusConflict); err != nil {
 		return provisioning.HarborResult{}, err
 	}
-	robotName := "robot$" + projName
 	var robotResp struct {
 		Name   string `json:"name"`
 		Secret string `json:"secret"`
 	}
+	if !c.real {
+		// Прогон против WireMock-мока: минимальное тело robot-аккаунта, имя
+		// конструируется, секрет подставляется детерминированной меткой при отсутствии.
+		robotName := "robot$" + projName
+		if err := c.doer.call(ctx, http.MethodPost, c.base+"/api/v2.0/robots",
+			map[string]any{"name": robotName, "level": "project"}, &robotResp, http.StatusConflict); err != nil {
+			return provisioning.HarborResult{}, err
+		}
+		if robotResp.Name == "" {
+			robotResp.Name = robotName
+		}
+		if robotResp.Secret == "" {
+			robotResp.Secret = "mock-harbor-secret"
+		}
+		return provisioning.HarborResult{ProjectName: projName, RobotName: robotResp.Name, RobotToken: robotResp.Secret}, nil
+	}
+	// Реальный Harbor: robot на уровне system со scope на проект (project-level robots не
+	// перечислимы — их id не резолвить для отзыва). Тело v2.0 (level/permissions/duration).
+	// Повтор имени → 409 идемпотентно. В CI/CD-переменные инъектируются ФАКТИЧЕСКИ
+	// возвращённые name (`robot$<reqName>`) и secret, не сконструированные.
 	if err := c.doer.call(ctx, http.MethodPost, c.base+"/api/v2.0/robots",
-		map[string]any{"name": robotName, "level": "project"}, &robotResp, http.StatusConflict); err != nil {
+		harborRobotBody(harborRobotReqName(ref), projName), &robotResp, http.StatusConflict); err != nil {
 		return provisioning.HarborResult{}, err
-	}
-	// Мок может не вернуть секрет; подставляем детерминированную метку, реальный
-	// секрет приходит от настоящего Harbor.
-	if robotResp.Name == "" {
-		robotResp.Name = robotName
-	}
-	if robotResp.Secret == "" {
-		robotResp.Secret = "mock-harbor-secret"
 	}
 	return provisioning.HarborResult{ProjectName: projName, RobotName: robotResp.Name, RobotToken: robotResp.Secret}, nil
 }
 
 func (c *harborHTTP) DeleteProject(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Компенсация создания (ADR-0005): удалить проект И robot. Реальный Harbor оставляет
+	// system-робота при удалении проекта, поэтому сначала отзываем робота (по числовому
+	// id), затем удаляем проект. Идемпотентность: отсутствие робота/проекта (404) — успех.
 	projName := ref.Project + "-" + ref.Name
+	if c.real {
+		if err := c.revokeRobot(ctx, ref); err != nil {
+			return err
+		}
+	}
 	return c.doer.call(ctx, http.MethodDelete, c.base+"/api/v2.0/projects/"+projName, nil, nil, http.StatusNotFound)
 }
 
-func (c *harborHTTP) SetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error {
-	// Перевод директории в read-only + отзыв Robot (идемпотентно). 404 — успех.
-	projName := ref.Project + "-" + ref.Name
-	if err := c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
-		map[string]any{"metadata": map[string]string{"public": "false"}, "read_only": true}, nil, http.StatusNotFound); err != nil {
+// revokeRobot отзывает system-робота сервиса (резолв id по имени → DELETE /robots/<id>).
+// Идемпотентно: робот не найден — no-op-успех; DELETE отсутствующего id → 404 — успех.
+// Только реальный Harbor (резолвинг через перечисление system-роботов).
+func (c *harborHTTP) revokeRobot(ctx context.Context, ref provisioning.ResourceRef) error {
+	id, ok, err := c.resolveRobotID(ctx, harborRobotReqName(ref))
+	if err != nil {
 		return err
 	}
-	robotName := "robot$" + projName
-	return c.doer.call(ctx, http.MethodDelete, c.base+"/api/v2.0/robots/"+robotName, nil, nil, http.StatusNotFound)
+	if !ok {
+		return nil // робот уже отозван/не создан — идемпотентный no-op
+	}
+	url := fmt.Sprintf("%s/api/v2.0/robots/%d", c.base, id)
+	return c.doer.call(ctx, http.MethodDelete, url, nil, nil, http.StatusNotFound)
+}
+
+func (c *harborHTTP) SetReadOnly(ctx context.Context, ref provisioning.ResourceRef) error {
+	// Decommission (ADR-0012, точка невозврата): сделать проект недоступным на запись.
+	// В Harbor НЕТ project-level read_only (поле молча игнорируется), поэтому read-only =
+	// ОТЗЫВ robot-аккаунта (CI/CD больше не может push/pull). Проект СОХРАНЯЕТСЯ.
+	// Наблюдаемо: после отзыва робот не резолвится по имени. Необратимо: новый secret при
+	// воссоздании (SetWritable).
+	if !c.real {
+		// Мок: перевод директории в read-only + отзыв Robot по имени (идемпотентно).
+		projName := ref.Project + "-" + ref.Name
+		if err := c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
+			map[string]any{"metadata": map[string]string{"public": "false"}, "read_only": true}, nil, http.StatusNotFound); err != nil {
+			return err
+		}
+		robotName := "robot$" + projName
+		return c.doer.call(ctx, http.MethodDelete, c.base+"/api/v2.0/robots/"+robotName, nil, nil, http.StatusNotFound)
+	}
+	return c.revokeRobot(ctx, ref)
 }
 
 func (c *harborHTTP) SetWritable(ctx context.Context, ref provisioning.ResourceRef) error {
-	// Компенсация: вернуть директорию в writable (идемпотентно).
 	projName := ref.Project + "-" + ref.Name
-	return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
-		map[string]any{"read_only": false}, nil, http.StatusNotFound)
+	if !c.real {
+		// Мок: вернуть директорию в writable (идемпотентно).
+		return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName,
+			map[string]any{"read_only": false}, nil, http.StatusNotFound)
+	}
+	// Компенсация decommission: воссоздать system-робота проекта (новый secret). Повтор
+	// имени → 409 идемпотентно (робот ещё жив — отзыва не было).
+	if err := c.doer.call(ctx, http.MethodPost, c.base+"/api/v2.0/robots",
+		harborRobotBody(harborRobotReqName(ref), projName), nil, http.StatusConflict); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *harborHTTP) UpdateMetadata(ctx context.Context, ref provisioning.ResourceRef, target string) error {
-	// Обновление метаданных/прав директории под target-проект (идемпотентно: 404 —
-	// успех на стенде).
 	projName := ref.Project + "-" + ref.Name
-	body := map[string]any{"metadata": map[string]string{"owner_project": target}}
+	if !c.real {
+		// Мок: обновление метаданных/прав директории под target-проект (404 — успех).
+		body := map[string]any{"metadata": map[string]string{"owner_project": target}}
+		return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName, body, nil, http.StatusNotFound)
+	}
+	// Реальный Harbor (transfer, ADR-0013): rename/transfer проекта нет, произвольные
+	// ключи метаданных игнорируются — переносим наблюдаемый допустимый маркер (auto_scan).
+	// Имя целевого проекта Harbor не хранит; маркер фиксирует факт переноса (target в path
+	// не участвует — проект остаётся <source>-<name>). Идемпотентно (PUT — upsert; 404 —
+	// успех на стенде).
+	_ = target
+	body := map[string]any{"metadata": map[string]string{harborTransferMarkerField: "true"}}
 	return c.doer.call(ctx, http.MethodPut, c.base+"/api/v2.0/projects/"+projName, body, nil, http.StatusNotFound)
 }
 
