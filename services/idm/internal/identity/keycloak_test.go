@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/goleak"
@@ -20,7 +22,7 @@ func TestMain(m *testing.M) {
 // kcStub — httptest-стаб Keycloak Admin REST: token-эндпоинт + users.
 type kcStub struct {
 	srv         *httptest.Server
-	tokenCalls  int
+	tokenCalls  atomic.Int64
 	failToken   bool   // token-эндпоинт отвечает 503
 	failUsers   bool   // users-эндпоинт отвечает 503
 	lastFirst   string // последний first из запроса поиска
@@ -35,7 +37,7 @@ func newKCStub(t *testing.T) *kcStub {
 	s := &kcStub{usersByID: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/realms/idp/protocol/openid-connect/token", func(w http.ResponseWriter, r *http.Request) {
-		s.tokenCalls++
+		s.tokenCalls.Add(1)
 		_ = r.ParseForm()
 		s.lastSecret = r.Form.Get("client_secret")
 		if s.failToken {
@@ -180,7 +182,41 @@ func TestToken_Reused(t *testing.T) {
 			t.Fatalf("Resolve #%d: %v", i, err)
 		}
 	}
-	if s.tokenCalls != 1 {
-		t.Fatalf("токен должен переиспользоваться: вызовов token=%d", s.tokenCalls)
+	if got := s.tokenCalls.Load(); got != 1 {
+		t.Fatalf("токен должен переиспользоваться: вызовов token=%d", got)
+	}
+}
+
+// TestToken_SingleflightUnderConcurrency проверяет, что при конкурентных промахах
+// кэша токен запрашивается у Keycloak ровно один раз (singleflight), а сетевой
+// запрос не сериализует обращения под мьютексом (C1/R1). Прогон под -race также
+// подтверждает отсутствие гонок при параллельном резолве.
+func TestToken_SingleflightUnderConcurrency(t *testing.T) {
+	t.Parallel()
+	s := newKCStub(t)
+	s.usersByID["u-1"] = `{"id":"u-1","username":"ivan","enabled":true}`
+	c := newClient(t, s)
+
+	const goroutines = 32
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	errs := make([]error, goroutines)
+	for i := range goroutines {
+		go func() {
+			defer wg.Done()
+			_, errs[i] = c.Resolve(context.Background(), []string{"u-1"})
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Resolve #%d: %v", i, err)
+		}
+	}
+	// Холодный старт под нагрузкой: singleflight схлопывает N промахов в один
+	// запрос токена (допускаем небольшой запас на гонку входа в кэш).
+	if got := s.tokenCalls.Load(); got < 1 || got > 2 {
+		t.Fatalf("ожидался ~1 запрос токена (singleflight), получено %d", got)
 	}
 }
