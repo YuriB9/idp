@@ -39,6 +39,17 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    groups:
+      # Vite и его плагины связаны peer-зависимостями (plugin-react требует
+      # vite того же мажора). Поэлементный bump упирается в ERESOLVE (см. PR
+      # #64/#26: plugin-react 6 ↔ vite 6) — группируем, чтобы dependabot
+      # предлагал согласованный апгрейд одним PR.
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "@tailwindcss/vite"
+          - "vitest"
     ignore:
       # openapi-typescript@7.x / openapi-zod-client требуют peer typescript@^5.x.
       # Мажорные апгрейды TypeScript (6+) ломают codegen-тулчейн — игнорируем,

@@ -10,8 +10,10 @@ import path from "node:path";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    // Алиас @/* → src/* (как в остальных фронтендах платформы).
-    alias: { "@": path.resolve(__dirname, "./src") },
+    // Алиас @/* → src/* (как в остальных фронтендах платформы). Используем
+    // import.meta.dirname (нативный ESM, Node ≥20.11): __dirname в ESM-конфиге
+    // под загрузчиком конфигов Vite 8 недоступен.
+    alias: { "@": path.resolve(import.meta.dirname, "./src") },
   },
   server: {
     port: 3000,
