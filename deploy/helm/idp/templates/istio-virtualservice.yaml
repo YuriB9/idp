@@ -1,0 +1,33 @@
+{{/*
+Маршрутизация периметра (ADR-0009/0025), один внешний хост (same-origin):
+  - /api → gateway (валидирует JWT сам, in-app JWKS, fail-closed);
+  - остальное → oauth2-proxy (OIDC-логин + раздача авторизованного портала).
+Same-origin сохраняется: и портал, и /api под одним хостом.
+*/}}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: idp
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" "idp") | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.externalHost | quote }}
+  gateways:
+    - idp
+  http:
+    - name: api
+      match:
+        - uri:
+            prefix: /api
+      route:
+        - destination:
+            host: gateway
+            port:
+              number: {{ .Values.components.gateway.httpPort }}
+    - name: portal
+      route:
+        - destination:
+            host: oauth2-proxy
+            port:
+              number: {{ index .Values.components "oauth2-proxy" "httpPort" }}

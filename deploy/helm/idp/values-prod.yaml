@@ -1,0 +1,96 @@
+# Production overlay. fail-closed: реальный https JWKS_URL у сервисов с
+# аутентификацией (пустое значение роняет рендер — idp-lib.assertAuth), НЕТ
+# AUTH_DISABLED/SSRF_DISABLED, STRICT mTLS, объявленные ServiceEntry для внешних
+# систем. Хосты/реестр/секреты — плейсхолдеры; реальные значения подаются вне git.
+
+global:
+  image:
+    # Реальный реестр образов платформы (плейсхолдер).
+    registry: registry.example.com/idp
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+istio:
+  # Внешний домен периметра (плейсхолдер — задаётся под реальный кластер/домен).
+  externalHost: idp.example.com
+  gateway:
+    tlsCredentialName: idp-ingress-tls
+  mtlsStrict: true
+  # Egress к внешним системам. SSRF-guard приложения остаётся основным контролем.
+  externalServices:
+    - name: keycloak
+      hosts: ["keycloak.example.com"]
+      ports:
+        - { number: 443, name: https, protocol: TLS }
+    - name: temporal
+      hosts: ["temporal.example.com"]
+      ports:
+        - { number: 7233, name: grpc, protocol: GRPC }
+    - name: gitlab
+      hosts: ["gitlab.example.com"]
+      ports:
+        - { number: 443, name: https, protocol: TLS }
+    - name: vault
+      hosts: ["vault.example.com"]
+      ports:
+        - { number: 443, name: https, protocol: TLS }
+    - name: harbor
+      hosts: ["harbor.example.com"]
+      ports:
+        - { number: 443, name: https, protocol: TLS }
+    # TCP-зависимости — отдельными ServiceEntry с addresses (Istio требует VIP
+    # для не-HTTP/не-TLS протоколов; плейсхолдеры из 240.0.0.0/4).
+    - name: postgres
+      hosts: ["postgres.example.com"]
+      addresses: ["240.0.0.1/32"]
+      resolution: NONE
+      ports:
+        - { number: 5432, name: tcp-postgres, protocol: TCP }
+    - name: dragonfly
+      hosts: ["dragonfly.example.com"]
+      addresses: ["240.0.0.2/32"]
+      resolution: NONE
+      ports:
+        - { number: 6379, name: tcp-redis, protocol: TCP }
+
+components:
+  oauth2-proxy:
+    env:
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "https://keycloak.example.com/realms/idp"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+
+  gateway:
+    env:
+      # fail-closed: пустой JWKS_URL прерывает рендер (idp-lib.assertAuth).
+      JWKS_URL: "https://keycloak.example.com/realms/idp/protocol/openid-connect/certs"
+      AUTH_ISSUER: "https://keycloak.example.com/realms/idp"
+      AUTH_AUDIENCE: "idp-portal"
+      AUTH_METHODS: "RS256"
+
+  idm:
+    env:
+      JWKS_URL: "https://keycloak.example.com/realms/idp/protocol/openid-connect/certs"
+      AUTH_ISSUER: "https://keycloak.example.com/realms/idp"
+      AUTH_AUDIENCE: "idp-portal"
+      AUTH_METHODS: "RS256"
+      KEYCLOAK_BASE_URL: "https://keycloak.example.com"
+
+  projects:
+    env:
+      JWKS_URL: "https://keycloak.example.com/realms/idp/protocol/openid-connect/certs"
+      AUTH_ISSUER: "https://keycloak.example.com/realms/idp"
+      AUTH_AUDIENCE: "idp-portal"
+      AUTH_METHODS: "RS256"
+      TEMPORAL_HOSTPORT: "temporal.example.com:7233"
+
+  devinfra-worker:
+    env:
+      TEMPORAL_HOSTPORT: "temporal.example.com:7233"
+      GITLAB_BASE_URL: "https://gitlab.example.com"
+      VAULT_BASE_URL: "https://vault.example.com"
+      HARBOR_BASE_URL: "https://harbor.example.com"
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70

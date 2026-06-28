@@ -1,0 +1,52 @@
+# Локальный overlay (отладка в kind/minikube). Повторяет семантику
+# docker-compose: аутентификация выключена явным флагом (AUTH_DISABLED), egress к
+# http-мокам с выключенным SSRF-guard, ослабленный mTLS. ЭТОТ overlay НЕ для прода.
+
+global:
+  image:
+    registry: idp
+    tag: dev
+    pullPolicy: IfNotPresent
+
+istio:
+  externalHost: idp.local
+  # Локально меш не строгий — упрощает отладку без полного istio-окружения.
+  mtlsStrict: false
+  externalServices: []
+
+components:
+  oauth2-proxy:
+    env:
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "http://keycloak:8080/realms/idp"
+      OAUTH2_PROXY_COOKIE_SECURE: "false"
+
+  gateway:
+    env:
+      # Локально периметр аутентифицирует oauth2-proxy; in-app проверку JWT
+      # отключаем единственным разрешённым способом (канонический субъект — sub
+      # dev-пользователя из realm-файла, ADR-0016).
+      AUTH_DISABLED: "true"
+      AUTH_DISABLED_SUBJECT: "11111111-1111-1111-1111-111111111111"
+
+  idm:
+    env:
+      AUTH_DISABLED: "true"
+      KEYCLOAK_BASE_URL: "http://keycloak:8080"
+      # Адрес keycloak приватный (http) — SSRF-guard локально выключен.
+      SSRF_DISABLED: "true"
+
+  projects:
+    env:
+      AUTH_DISABLED: "true"
+      AUTH_DISABLED_SUBJECT: "11111111-1111-1111-1111-111111111111"
+
+  devinfra-worker:
+    env:
+      # Интеграции — http-моки на приватных адресах, SSRF-guard выключен (как в compose).
+      GITLAB_BASE_URL: "http://mock-gitlab:8080"
+      VAULT_BASE_URL: "http://mock-vault:8080"
+      HARBOR_BASE_URL: "http://mock-harbor:8080"
+      SSRF_DISABLED: "true"
+    # Локально воркеру достаточно одной реплики, HPA не нужен.
+    hpa:
+      enabled: false

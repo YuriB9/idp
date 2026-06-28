@@ -1,0 +1,16 @@
+# Umbrella-чарт платформы IDP (ADR-0024): рабочие нагрузки периметра и ядра +
+# сетевой слой Istio (ADR-0025). Общие шаблоны вынесены в library-chart idp-lib
+# (зависимость ниже). Окружения задаются через values-<env>.yaml.
+#
+# Перед lint/template выполнить `helm dependency build deploy/helm/idp`,
+# чтобы вендорить idp-lib в charts/ (см. Makefile-таргет helm-deps).
+apiVersion: v2
+name: idp
+description: Internal Developer Platform — Helm-деплой периметра и ядра с сетевым слоем Istio
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: idp-lib
+    version: 0.1.0
+    repository: "file://../idp-lib"

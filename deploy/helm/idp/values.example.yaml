@@ -1,0 +1,45 @@
+# Пример формы СЕКРЕТНЫХ значений (ADR-0024/0025). РЕАЛЬНЫЕ значения НЕ коммитятся:
+# подаются вне git при установке/обновлении, напр.:
+#   helm upgrade --install idp deploy/helm/idp \
+#     -f deploy/helm/idp/values-prod.yaml -f secrets.prod.yaml
+# где secrets.prod.yaml имеет структуру ниже (хранится в Vault/CI-secret, не в git).
+#
+# Здесь — только плейсхолдеры, демонстрирующие набор ключей Secret каждого
+# компонента и миграций.
+
+migrations:
+  idm:
+    secretEnv:
+      IDM_DSN: "postgres://idm:CHANGE_ME@postgres.example.com:5432/idm?sslmode=require"
+  projects:
+    secretEnv:
+      PROJECTS_DSN: "postgres://projects:CHANGE_ME@postgres.example.com:5432/projects?sslmode=require"
+
+components:
+  oauth2-proxy:
+    secretEnv:
+      OAUTH2_PROXY_CLIENT_SECRET: "CHANGE_ME"
+      # Ровно 32 байта (AES-256) — генерируется, не переиспользуется между средами.
+      OAUTH2_PROXY_COOKIE_SECRET: "CHANGE_ME_32_BYTES_COOKIE_SECRET"
+
+  gateway:
+    secretEnv:
+      AUTH_ADMIN_KEY: "CHANGE_ME"
+
+  idm:
+    secretEnv:
+      PG_DSN: "postgres://idm:CHANGE_ME@postgres.example.com:5432/idm?sslmode=require"
+      KEYCLOAK_SA_CLIENT_SECRET: "CHANGE_ME"
+      AUTH_ADMIN_KEY: "CHANGE_ME"
+
+  projects:
+    secretEnv:
+      PG_DSN: "postgres://projects:CHANGE_ME@postgres.example.com:5432/projects?sslmode=require"
+
+  devinfra-worker:
+    secretEnv:
+      PG_DSN: "postgres://projects:CHANGE_ME@postgres.example.com:5432/projects?sslmode=require"
+      HARBOR_USERNAME: "robot$idp"
+      HARBOR_PASSWORD: "CHANGE_ME"
+      GITLAB_TOKEN: "CHANGE_ME"
+      VAULT_TOKEN: "CHANGE_ME"

@@ -1,0 +1,14 @@
+{{/*
+PeerAuthentication: режим mTLS меша для внутреннего трафика (ADR-0025). В проде —
+STRICT (весь трафик взаимно аутентифицирован и зашифрован). В local-overlay можно
+ослабить до PERMISSIVE через istio.mtlsStrict=false (отладка без полного меша).
+*/}}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" "idp") | nindent 4 }}
+spec:
+  mtls:
+    mode: {{ if .Values.istio.mtlsStrict }}STRICT{{ else }}PERMISSIVE{{ end }}

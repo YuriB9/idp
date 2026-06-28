@@ -1,0 +1,64 @@
+{{/*
+Миграции схем idm и projects как pre-deploy Job (ADR-0024). Применяются до старта
+зависящих сервисов через Helm-хук pre-install/pre-upgrade. Поды Job — БЕЗ
+Istio-sidecar (sidecar.istio.io/inject:"false"), иначе sidecar не завершается и
+Job висит (известный нюанс Istio, ADR-0025).
+*/}}
+{{- if .Values.migrations.enabled }}
+{{- range $key, $m := .Values.migrations }}
+{{- if and (kindIs "map" $m) ($m.image) }}
+{{- $g := $.Values.global.image }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-{{ $key }}
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" (printf "migrate-%s" $key)) | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "idp-lib.selectorLabels" (dict "root" $ "name" (printf "migrate-%s" $key)) | nindent 8 }}
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate-{{ $key }}
+          image: {{ printf "%s/%s:%s" ($m.image.registry | default $g.registry) $m.image.repository ($m.image.tag | default $g.tag) }}
+          imagePullPolicy: {{ $g.pullPolicy | default "IfNotPresent" }}
+          envFrom:
+            - secretRef:
+                name: migrate-{{ $key }}-secret
+          securityContext:
+            {{- include "idp-lib.containerSecurityContext" (dict) | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.global.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: migrate-{{ $key }}-secret
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" (printf "migrate-%s" $key)) | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+type: Opaque
+stringData:
+  {{- range $k, $v := $m.secretEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,10 @@
+{{/*
+Рабочие нагрузки всех компонентов периметра и ядра. Каждый компонент
+рендерится единообразно через library-chart idp-lib (ServiceAccount + ConfigMap +
+Secret + Deployment + Service + HPA). Добавление компонента — только запись в
+values.components, без нового шаблона (DRY, ADR-0024).
+*/}}
+{{- range $name, $c := .Values.components }}
+---
+{{ include "idp-lib.workload" (dict "root" $ "name" $name "component" $c) }}
+{{- end }}
