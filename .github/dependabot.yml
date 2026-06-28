@@ -1,36 +1,71 @@
 # Dependabot — автообновление зависимостей (docs/IDP_MVP_plan.md, БЛОК 0).
 # По одной gomod-экосистеме на модуль go.work + изолированный tools,
 # github-actions и npm для портала.
+#
+# Группировка gomod: minor/patch-обновления в каждом модуле батчатся в один
+# еженедельный PR (group go-deps), чтобы общие зависимости бампались согласованно
+# и не плодили разрозненные PR на каждую либу (ср. #75/#76). Мажорные апдейты
+# остаются отдельными PR (ревью вручную). После bump общей зависимости —
+# `make tidy-all` держит зависимые модули (devinfra-worker → projects) тидёнными
+# в порядке зависимостей (не повторяя падение PR #75).
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /pkg
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /services/gateway
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /services/idm
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /services/projects
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /services/devinfra-worker
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /tests/e2e
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: gomod
     directory: /tools
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

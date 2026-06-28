@@ -3,6 +3,12 @@
 # в графы сервисов (docs/adr/0006).
 
 MODULES := pkg services/gateway services/idm services/projects services/devinfra-worker tests/e2e
+# TIDY_ORDER — порядок tidy ПО ЗАВИСИМОСТЯМ go.work: сначала pkg (общий), затем
+# projects, затем зависящий от него devinfra-worker (replace ../projects), потом
+# остальные. Bump общей зависимости в одном модуле ломает `go mod tidy` в
+# зависимом, если тидить вразнобой (см. PR #75) — единый прогон в этом порядке
+# держит модули согласованными.
+TIDY_ORDER := pkg services/projects services/devinfra-worker services/gateway services/idm tests/e2e tools
 TOOLS_BIN := $(CURDIR)/tools/bin
 
 # DSN каталога проектов для миграций; переопределяется из окружения.
@@ -21,7 +27,7 @@ GATEWAY_BASE_URL ?= http://localhost:8081/api
 # CONF_EXAMPLES — число генерируемых примеров на операцию (баланс охвата/времени).
 CONF_EXAMPLES ?= 25
 
-.PHONY: tools proto openapi gen test lint lint-openapi tidy tidy-check migrate-projects migrate-idm conformance
+.PHONY: tools proto openapi gen test lint lint-openapi tidy tidy-all tidy-check migrate-projects migrate-idm conformance
 
 ## tools: собрать пинованные инструменты кодогена в tools/bin
 tools:
@@ -95,12 +101,17 @@ conformance:
 		--checks "$(CONF_CHECKS)" \
 		--max-examples=$(CONF_EXAMPLES)
 
-## tidy: go mod tidy по всем модулям
-tidy:
-	@for m in $(MODULES) tools; do echo ">> tidy $$m"; (cd $$m && GOWORK=off go mod tidy) || exit 1; done
+## tidy: go mod tidy по всем модулям (псевдоним tidy-all)
+tidy: tidy-all
+
+## tidy-all: go mod tidy (GOWORK=off) по модулям в порядке зависимостей
+## (TIDY_ORDER). Единый прогон после bump общей зависимости держит зависимые
+## модули (devinfra-worker → projects) согласованными, не повторяя падение PR #75.
+tidy-all:
+	@for m in $(TIDY_ORDER); do echo ">> tidy $$m"; (cd $$m && GOWORK=off go mod tidy) || exit 1; done
 
 ## tidy-check: проверить, что go.mod/go.sum синхронизированы
-tidy-check: tidy
+tidy-check: tidy-all
 	git diff --exit-code
 
 ## lint: golangci-lint по всем модулям (требует golangci-lint в PATH)

@@ -19,9 +19,16 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
+
 	"github.com/YuriB9/idp/pkg/httpclient"
 	"github.com/YuriB9/idp/pkg/ssrf"
 )
+
+// resolveConcurrency — предел параллелизма резолва набора субъектов в Keycloak
+// (ограниченно-параллельный Resolve вместо N последовательных round-trips).
+const resolveConcurrency = 8
 
 // ErrUnavailable — каталог идентичностей недоступен (Keycloak недоступен/таймаут/
 // 5xx или не удалось получить токен сервис-аккаунта). На периметре маппится в 503
@@ -68,6 +75,9 @@ type KeycloakClient struct {
 	mu    sync.Mutex // защищает кэш токена сервис-аккаунта
 	token string
 	exp   time.Time
+	// tokenSF дедуплицирует одновременные запросы токена: один in-flight запрос
+	// на N конкурентных промахов (без удержания mu на время сетевого вызова).
+	tokenSF singleflight.Group
 }
 
 // NewKeycloakClient собирает клиент. При Guarded=true базовый URL проверяется
@@ -140,22 +150,33 @@ func (c *KeycloakClient) Search(ctx context.Context, query string, first, max in
 // идентичности. Отсутствующий в каталоге субъект возвращается с Found=false (не
 // опускается). Недоступность Keycloak/токена → ErrUnavailable.
 func (c *KeycloakClient) Resolve(ctx context.Context, subjects []string) ([]Identity, error) {
-	out := make([]Identity, 0, len(subjects))
-	for _, sub := range subjects {
-		endpoint := fmt.Sprintf("%s/admin/realms/%s/users/%s", c.base, url.PathEscape(c.cfg.Realm), url.PathEscape(sub))
-		var u keycloakUser
-		err := c.adminGet(ctx, endpoint, &u)
-		switch {
-		case errors.Is(err, errNotFoundUser):
-			// «Осиротевший» субъект: роль есть, в каталоге нет — не ошибка.
-			out = append(out, Identity{Subject: sub, Found: false})
-		case err != nil:
-			return nil, err
-		default:
-			id := u.toIdentity()
-			id.Subject = sub // канонический ключ — запрошенный sub
-			out = append(out, id)
-		}
+	// Ограниченно-параллельный резолв: запросы независимы, результат пишется в
+	// предвыделенный срез по индексу субъекта (без гонок — каждая горутина пишет
+	// свой элемент), поэтому порядок выхода совпадает с порядком входа.
+	out := make([]Identity, len(subjects))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(resolveConcurrency)
+	for i, sub := range subjects {
+		g.Go(func() error {
+			endpoint := fmt.Sprintf("%s/admin/realms/%s/users/%s", c.base, url.PathEscape(c.cfg.Realm), url.PathEscape(sub))
+			var u keycloakUser
+			err := c.adminGet(gctx, endpoint, &u)
+			switch {
+			case errors.Is(err, errNotFoundUser):
+				// «Осиротевший» субъект: роль есть, в каталоге нет — не ошибка.
+				out[i] = Identity{Subject: sub, Found: false}
+			case err != nil:
+				return err
+			default:
+				id := u.toIdentity()
+				id.Subject = sub // канонический ключ — запрошенный sub
+				out[i] = id
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -203,14 +224,56 @@ type tokenResponse struct {
 }
 
 // accessToken возвращает токен сервис-аккаунта, переиспользуя кэш в памяти до
-// истечения с запасом. Секрет в логи/ошибки не попадает.
+// истечения с запасом. Мьютекс удерживается ТОЛЬКО на чтение/запись полей кэша
+// (без сетевого I/O под локом); сетевой запрос дедуплицируется singleflight —
+// один in-flight запрос на N конкурентных промахов. Секрет в логи/ошибки не
+// попадает.
 func (c *KeycloakClient) accessToken(ctx context.Context) (string, error) {
+	// Быстрый путь: валидный кэшированный токен (под локом только чтение полей).
+	if tok, ok := c.cachedToken(); ok {
+		return tok, nil
+	}
+
+	// Промах: единственный in-flight запрос токена (singleflight). Сетевой вызов
+	// выполняется без удержания мьютекса.
+	v, err, _ := c.tokenSF.Do("token", func() (any, error) {
+		// Повторная проверка: лидер мог обновить токен, пока мы ждали singleflight.
+		if tok, ok := c.cachedToken(); ok {
+			return tok, nil
+		}
+		// Запрос токена ведём в контексте, переживающем отмену контекста лидера:
+		// ведомые singleflight не должны падать из-за отмены первого вызывающего
+		// (таймаут всё равно ограничен httpclient). Это снимает caveat singleflight.
+		tok, exp, ferr := c.fetchToken(context.WithoutCancel(ctx))
+		if ferr != nil {
+			return "", ferr
+		}
+		c.mu.Lock()
+		c.token, c.exp = tok, exp
+		c.mu.Unlock()
+		return tok, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
+// cachedToken возвращает кэшированный токен, если он ещё валиден. Удерживает
+// мьютекс только на время чтения полей (без I/O).
+func (c *KeycloakClient) cachedToken() (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.token != "" && time.Now().Before(c.exp) {
-		return c.token, nil
+		return c.token, true
 	}
+	return "", false
+}
 
+// fetchToken запрашивает новый токен сервис-аккаунта по client_credentials и
+// возвращает токен с моментом истечения (с запасом). Без удержания мьютекса.
+// Секрет/тело наружу не отдаются.
+func (c *KeycloakClient) fetchToken(ctx context.Context) (string, time.Time, error) {
 	form := url.Values{}
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", c.cfg.ClientID)
@@ -219,31 +282,29 @@ func (c *KeycloakClient) accessToken(ctx context.Context) (string, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", fmt.Errorf("%w: сборка запроса токена: %v", ErrUnavailable, err)
+		return "", time.Time{}, fmt.Errorf("%w: сборка запроса токена: %v", ErrUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		// Намеренно НЕ включаем тело/секрет — только факт ошибки транспорта.
-		return "", fmt.Errorf("%w: запрос токена сервис-аккаунта", ErrUnavailable)
+		return "", time.Time{}, fmt.Errorf("%w: запрос токена сервис-аккаунта", ErrUnavailable)
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("%w: токен сервис-аккаунта статус %d", ErrUnavailable, resp.StatusCode)
+		return "", time.Time{}, fmt.Errorf("%w: токен сервис-аккаунта статус %d", ErrUnavailable, resp.StatusCode)
 	}
 	var tr tokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
-		return "", fmt.Errorf("%w: разбор токена", ErrUnavailable)
+		return "", time.Time{}, fmt.Errorf("%w: разбор токена", ErrUnavailable)
 	}
 	if tr.AccessToken == "" {
-		return "", fmt.Errorf("%w: пустой токен сервис-аккаунта", ErrUnavailable)
+		return "", time.Time{}, fmt.Errorf("%w: пустой токен сервис-аккаунта", ErrUnavailable)
 	}
 	// Запас в 30с от заявленного срока, чтобы не использовать токен на грани истечения.
 	ttl := time.Duration(tr.ExpiresIn) * time.Second
 	if ttl > 30*time.Second {
 		ttl -= 30 * time.Second
 	}
-	c.token = tr.AccessToken
-	c.exp = time.Now().Add(ttl)
-	return c.token, nil
+	return tr.AccessToken, time.Now().Add(ttl), nil
 }
