@@ -40,7 +40,7 @@ type RoleAdmin interface {
 	RevokeRole(ctx context.Context, subject, role string) error
 }
 
-// DecommStore — зависимость activity вывода из эксплуatации от слоя каталога
+// DecommStore — зависимость activity вывода из эксплуатации от слоя каталога
 // (guarded-CAS ACTIVE→DECOMMISSIONED, ADR-0012).
 type DecommStore interface {
 	Decommission(ctx context.Context, serviceID string) error
