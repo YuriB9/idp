@@ -375,3 +375,103 @@ harbor: harbor-up
 ## harbor-logs: собрать логи IDP-стека профиля Harbor (диагностика).
 harbor-logs:
 	$(COMPOSE_HARBOR) logs --no-color
+
+# --- Деплой в Kubernetes: образы и валидация Helm-чартов (ADR-0024/0025) ---
+# Реального кластера в окружении нет — таргеты собирают образы и валидируют
+# чарты/Istio-ресурсы без живого деплоя (helm lint/template → kubeconform +
+# istioctl analyze). Версии инструментов и Istio CRD-схем пинуются для
+# воспроизводимости (как govulncheck/golangci-lint).
+
+HELM ?= helm
+ISTIOCTL ?= istioctl
+KUBECONFORM ?= $(TOOLS_BIN)/kubeconform
+KUBECONFORM_VERSION ?= v0.7.0
+# Версия k8s для проверки совместимости схем встроенных ресурсов.
+KUBECONFORM_K8S_VERSION ?= 1.30.0
+HELM_CHART := deploy/helm/idp
+HELM_ENVS := local prod
+# Локальные (вендоренные) JSON-схемы Istio CRD — офлайн, без сетевых обращений.
+ISTIO_SCHEMAS := $(CURDIR)/deploy/helm/schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+# Реестр/тег собираемых образов (переопределяются для CI/прода).
+IMAGE_REGISTRY ?= idp
+IMAGE_TAG ?= dev
+
+.PHONY: images image-gateway image-idm image-projects image-devinfra-worker image-web \
+	image-migrate-idm image-migrate-projects \
+	helm-tools helm-deps helm-lint helm-template helm-validate helm-analyze helm
+
+## images: собрать все образы платформы (4 сервиса + портал + 2 мигратора).
+images: image-gateway image-idm image-projects image-devinfra-worker image-web \
+	image-migrate-idm image-migrate-projects
+
+## image-gateway: образ API-шлюза (контекст — корень репозитория).
+image-gateway:
+	docker build -f services/gateway/Dockerfile -t $(IMAGE_REGISTRY)/idp-gateway:$(IMAGE_TAG) .
+
+## image-idm: образ сервиса IDM.
+image-idm:
+	docker build -f services/idm/Dockerfile -t $(IMAGE_REGISTRY)/idp-idm:$(IMAGE_TAG) .
+
+## image-projects: образ сервиса проектов.
+image-projects:
+	docker build -f services/projects/Dockerfile -t $(IMAGE_REGISTRY)/idp-projects:$(IMAGE_TAG) .
+
+## image-devinfra-worker: образ Temporal-воркера DevInfra.
+image-devinfra-worker:
+	docker build -f services/devinfra-worker/Dockerfile -t $(IMAGE_REGISTRY)/idp-devinfra-worker:$(IMAGE_TAG) .
+
+## image-web: production-образ портала (multi-stage vite build → nginx, контекст — web/).
+image-web:
+	docker build -f web/Dockerfile -t $(IMAGE_REGISTRY)/idp-web:$(IMAGE_TAG) web
+
+## image-migrate-idm: образ-мигратор схемы IDM (pre-deploy Job).
+image-migrate-idm:
+	docker build -f services/idm/migrate.Dockerfile -t $(IMAGE_REGISTRY)/idp-migrate-idm:$(IMAGE_TAG) .
+
+## image-migrate-projects: образ-мигратор каталога проектов (pre-deploy Job).
+image-migrate-projects:
+	docker build -f services/projects/migrate.Dockerfile -t $(IMAGE_REGISTRY)/idp-migrate-projects:$(IMAGE_TAG) .
+
+## helm-tools: собрать пинованный kubeconform в tools/bin.
+helm-tools:
+	GOWORK=off GOBIN=$(TOOLS_BIN) go install github.com/yannh/kubeconform/cmd/kubeconform@$(KUBECONFORM_VERSION)
+
+## helm-deps: вендорить library-chart idp-lib в charts/ (по Chart.lock).
+helm-deps:
+	$(HELM) dependency build $(HELM_CHART)
+
+## helm-lint: helm lint чарта по каждому overlay (local/prod).
+helm-lint: helm-deps
+	@for env in $(HELM_ENVS); do \
+		echo "== helm lint ($$env) =="; \
+		$(HELM) lint $(HELM_CHART) -f $(HELM_CHART)/values-$$env.yaml || exit 1; \
+	done
+
+## helm-template: отрендерить чарт по каждому overlay (диагностика).
+helm-template: helm-deps
+	@for env in $(HELM_ENVS); do \
+		echo "== helm template ($$env) =="; \
+		$(HELM) template idp $(HELM_CHART) -f $(HELM_CHART)/values-$$env.yaml; \
+	done
+
+## helm-validate: рендер каждого overlay → kubeconform (+ вендоренные Istio CRD-схемы).
+helm-validate: helm-deps
+	@for env in $(HELM_ENVS); do \
+		echo "== kubeconform ($$env) =="; \
+		$(HELM) template idp $(HELM_CHART) -f $(HELM_CHART)/values-$$env.yaml \
+		| $(KUBECONFORM) -strict -summary \
+			-kubernetes-version $(KUBECONFORM_K8S_VERSION) \
+			-schema-location default \
+			-schema-location '$(ISTIO_SCHEMAS)' || exit 1; \
+	done
+
+## helm-analyze: istioctl analyze рендера каждого overlay (офлайн, без кластера).
+helm-analyze: helm-deps
+	@for env in $(HELM_ENVS); do \
+		echo "== istioctl analyze ($$env) =="; \
+		$(HELM) template idp $(HELM_CHART) -f $(HELM_CHART)/values-$$env.yaml \
+		| $(ISTIOCTL) analyze --use-kube=false - || exit 1; \
+	done
+
+## helm: полная валидация чартов без кластера (lint + kubeconform + istioctl analyze).
+helm: helm-lint helm-validate helm-analyze

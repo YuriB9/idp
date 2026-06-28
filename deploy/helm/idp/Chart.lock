@@ -1,0 +1,6 @@
+dependencies:
+- name: idp-lib
+  repository: file://../idp-lib
+  version: 0.1.0
+digest: sha256:733dc18b1b63f9a18e633841bfac88c43d4775946f4187ddbbe2c27576a7e85d
+generated: "2026-06-28T19:26:13.57312125+03:00"

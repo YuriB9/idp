@@ -1,0 +1,99 @@
+{{/*
+Авторизация трафика меша (ADR-0025): fail-closed default-deny + явные allow по
+identity (ServiceAccount). Пустой ALLOW-policy на namespace запрещает весь трафик,
+дальше — точечные разрешения только для требуемых пар сервисов. Это сетевой
+defense-in-depth, НЕ замена RBAC-периметра IDM.
+
+Probes от kubelet идут вне меша и под эти политики не попадают.
+*/}}
+{{- $ns := .Release.Namespace }}
+{{- $ingress := .Values.istio.ingressPrincipal }}
+{{- $sa := dict "gateway" (printf "cluster.local/ns/%s/sa/gateway" $ns) "projects" (printf "cluster.local/ns/%s/sa/projects" $ns) "worker" (printf "cluster.local/ns/%s/sa/devinfra-worker" $ns) "oauth2" (printf "cluster.local/ns/%s/sa/oauth2-proxy" $ns) }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" "idp") | nindent 4 }}
+spec: {}
+---
+# Внешний вход → oauth2-proxy (только с ingressgateway).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-oauth2-proxy
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $ingress | quote }}]
+---
+# oauth2-proxy → портал (авторизованный трафик SPA).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-portal
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: portal
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $sa.oauth2 | quote }}]
+---
+# Внешний вход → gateway (/api маршрутится напрямую с ingressgateway; JWT
+# валидирует сам gateway, fail-closed).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-gateway
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $ingress | quote }}]
+---
+# idm принимает gRPC от gateway, projects и devinfra-worker.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-idm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: idm
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - {{ $sa.gateway | quote }}
+              - {{ $sa.projects | quote }}
+              - {{ $sa.worker | quote }}
+---
+# projects принимает gRPC от gateway и devinfra-worker.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-projects
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: projects
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - {{ $sa.gateway | quote }}
+              - {{ $sa.worker | quote }}

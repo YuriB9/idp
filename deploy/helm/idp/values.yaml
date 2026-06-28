@@ -1,0 +1,182 @@
+# Базовые значения umbrella-чарта IDP. Окружения переопределяют секции через
+# values-local.yaml / values-prod.yaml. Секреты здесь — пустые плейсхолдеры;
+# реальные значения подаются вне git (--values приватный/CI-secret). Форма всех
+# Secret-ключей описана в values.example.yaml.
+
+global:
+  image:
+    # Префикс реестра образов платформы; для прода/CI переопределяется на
+    # реальный реестр (напр. registry.example.com/idp). Внешние образы
+    # (oauth2-proxy) задают свой registry в секции компонента.
+    registry: idp
+    tag: dev
+    pullPolicy: IfNotPresent
+  # Дефолтные ресурсы пода (переопределяются на компонент при необходимости).
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+
+# Сетевой слой Istio (ADR-0025). Подробности — в templates/istio-*.yaml.
+istio:
+  # Внешний хост периметра (терминация TLS на ingressgateway). Плейсхолдер —
+  # реальный домен задаётся в prod-overlay.
+  externalHost: idp.local
+  gateway:
+    # Имя k8s Secret с TLS-сертификатом для ingressgateway (реальный TLS не в git;
+    # формат — см. deploy/tls). Создаётся вне чарта.
+    tlsCredentialName: idp-ingress-tls
+  # STRICT mTLS меша (PeerAuthentication). В local-overlay можно ослабить.
+  mtlsStrict: true
+  # Принципал ingressgateway для AuthorizationPolicy (identity входного шлюза).
+  ingressPrincipal: "cluster.local/ns/istio-system/sa/istio-ingressgateway"
+  # Внешние системы для ServiceEntry (egress). Базово пусто — задаётся в overlay.
+  externalServices: []
+
+# Миграции БД как pre-deploy Job (ADR-0024). Образы — migrate.Dockerfile.
+migrations:
+  enabled: true
+  idm:
+    image:
+      repository: idp-migrate-idm
+    secretEnv:
+      IDM_DSN: ""
+  projects:
+    image:
+      repository: idp-migrate-projects
+    secretEnv:
+      PROJECTS_DSN: ""
+
+# Компоненты периметра и ядра. Каждый рендерится через idp-lib.workload.
+components:
+  # Портал (SPA на nginx). /api в k8s маршрутит Istio (см. istio-virtualservice).
+  portal:
+    image:
+      repository: idp-web
+    httpPort: 8080
+    replicas: 2
+    # nginx отдаёт SPA на корне; readiness/liveness — GET / (нет /healthz).
+    probes:
+      liveness: "/"
+      readiness: "/"
+    # read-only-rootfs: nginx пишет во временные каталоги → нужен writable /tmp.
+    tmpDir: true
+
+  # Аутентифицирующий периметр (OIDC через Keycloak). Конфиг — через env
+  # OAUTH2_PROXY_* (нативно поддерживается образом, без cfg-файла).
+  oauth2-proxy:
+    image:
+      registry: quay.io
+      repository: oauth2-proxy/oauth2-proxy
+      tag: v7.7.1
+    httpPort: 4180
+    replicas: 2
+    probes:
+      liveness: "/ping"
+      readiness: "/ping"
+    env:
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_PROVIDER: "keycloak-oidc"
+      OAUTH2_PROXY_CLIENT_ID: "idp-portal"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Апстрим авторизованного трафика — портал (SPA). /api периметр валидирует
+      # сам gateway (in-app JWKS, fail-closed), поэтому отдельным апстримом не нужен.
+      OAUTH2_PROXY_UPSTREAMS: "http://portal:8080/"
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # OIDC_ISSUER_URL и COOKIE_SECURE — в overlay (зависят от окружения).
+    secretEnv:
+      OAUTH2_PROXY_CLIENT_SECRET: ""
+      OAUTH2_PROXY_COOKIE_SECRET: ""
+
+  # API-шлюз периметра. Валидирует JWT сам (in-app JWKS, fail-closed).
+  gateway:
+    image:
+      repository: idp-gateway
+    httpPort: 8080
+    replicas: 2
+    auth: true
+    env:
+      LOG_LEVEL: "info"
+      HTTP_ADDR: ":8080"
+      IDM_GRPC_ADDR: "idm:9090"
+      PROJECTS_GRPC_ADDR: "projects:9090"
+    secretEnv:
+      AUTH_ADMIN_KEY: ""
+
+  # IDM (RBAC + каталог субъектов). gRPC :9090 + HTTP :8081.
+  idm:
+    image:
+      repository: idp-idm
+    httpPort: 8081
+    grpcPort: 9090
+    probePort: 8081
+    replicas: 2
+    auth: true
+    env:
+      LOG_LEVEL: "info"
+      HTTP_ADDR: ":8081"
+      GRPC_ADDR: ":9090"
+      REDIS_ADDR: "dragonfly:6379"
+      KEYCLOAK_BASE_URL: "http://keycloak:8080"
+      KEYCLOAK_REALM: "idp"
+      KEYCLOAK_SA_CLIENT_ID: "idm-service-account"
+      IDM_IDENTITY_CACHE_TTL: "5m"
+    secretEnv:
+      PG_DSN: ""
+      KEYCLOAK_SA_CLIENT_SECRET: ""
+      AUTH_ADMIN_KEY: ""
+
+  # Сервис проектов (API + старт Temporal-воркфлоу). gRPC :9090 + HTTP :8082.
+  projects:
+    image:
+      repository: idp-projects
+    httpPort: 8082
+    grpcPort: 9090
+    probePort: 8082
+    replicas: 2
+    auth: true
+    env:
+      LOG_LEVEL: "info"
+      HTTP_ADDR: ":8082"
+      GRPC_ADDR: ":9090"
+      IDM_GRPC_ADDR: "idm:9090"
+      TEMPORAL_HOSTPORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+    secretEnv:
+      PG_DSN: ""
+
+  # Temporal-воркер DevInfra (масштабируется отдельно, HPA). HTTP :8083 (probes).
+  devinfra-worker:
+    image:
+      repository: idp-devinfra-worker
+    httpPort: 8083
+    replicas: 2
+    env:
+      LOG_LEVEL: "info"
+      HTTP_ADDR: ":8083"
+      IDM_GRPC_ADDR: "idm:9090"
+      TEMPORAL_HOSTPORT: "temporal:7233"
+      TEMPORAL_NAMESPACE: "default"
+      TEMPORAL_TASK_QUEUE: "devinfra"
+      GITLAB_BASE_URL: "https://gitlab.example"
+      VAULT_BASE_URL: "https://vault.example"
+      HARBOR_BASE_URL: "https://harbor.example"
+      GITLAB_OWNER_LOGINS: ""
+    secretEnv:
+      PG_DSN: ""
+      HARBOR_USERNAME: ""
+      HARBOR_PASSWORD: ""
+      GITLAB_TOKEN: ""
+      VAULT_TOKEN: ""
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70

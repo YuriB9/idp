@@ -177,7 +177,9 @@ services:
   web:
     build:
       context: ../../web
-      dockerfile: Dockerfile
+      # Dev-образ (Vite + HMR + прокси /api). Production-образ — web/Dockerfile
+      # (multi-stage vite build → nginx) используется только в Kubernetes (ADR-0024).
+      dockerfile: Dockerfile.dev
     environment:
       # Цель прокси /api внутри compose-сети — порт контейнера gateway (:8080).
       GATEWAY_URL: "http://gateway:8080"

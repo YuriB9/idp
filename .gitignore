@@ -24,3 +24,7 @@ IDP.code-workspace
 .playwright-mcp
 # Тест-сертификаты E2E (генерируются `make e2e-certs`, не коммитятся).
 deploy/tls/
+
+# Вендоренные Helm-зависимости (idp-lib собирается `helm dependency build` из
+# Chart.lock — он коммитится, а tgz-артефакт нет).
+deploy/helm/idp/charts/

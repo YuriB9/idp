@@ -1,0 +1,36 @@
+{{/*
+ServiceEntry для исходящих к внешним системам (Keycloak/Temporal/GitLab/Vault/
+Harbor/Postgres/Dragonfly, ADR-0025). Список задаётся в istio.externalServices
+(overlay). ВАЖНО: прикладной SSRF-guard (pkg/ssrf) остаётся ОСНОВНЫМ контролем
+egress — ServiceEntry лишь объявляет доступ из меша, а не заменяет проверки.
+*/}}
+{{- range .Values.istio.externalServices }}
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "idp-lib.labels" (dict "root" $ "name" .name) | nindent 4 }}
+spec:
+  hosts:
+    {{- range .hosts }}
+    - {{ . | quote }}
+    {{- end }}
+  location: MESH_EXTERNAL
+  resolution: {{ .resolution | default "DNS" }}
+  {{- with .addresses }}
+  # VIP(ы) для egress по TCP-портам (Istio требует addresses для не-HTTP/не-TLS
+  # протоколов). Плейсхолдеры из зарезервированного диапазона 240.0.0.0/4.
+  addresses:
+    {{- range . }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  ports:
+    {{- range .ports }}
+    - number: {{ .number }}
+      name: {{ .name }}
+      protocol: {{ .protocol }}
+    {{- end }}
+{{- end }}

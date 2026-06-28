@@ -1,0 +1,8 @@
+# Library-chart общих шаблонов платформы IDP (ADR-0024). Не устанавливается
+# самостоятельно — переиспользуется umbrella-чартом deploy/helm/idp через
+# include именованных шаблонов (idp-lib.deployment/service/configmap/...).
+apiVersion: v2
+name: idp-lib
+description: Общие шаблоны рабочих нагрузок платформы IDP (Deployment/Service/probes/securityContext)
+type: library
+version: 0.1.0
