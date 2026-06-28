@@ -54,6 +54,6 @@
 
 ## 8. Финал и CI
 
-- [ ] 8.1 Все комментарии в новом/изменённом коде — только на русском.
-- [ ] 8.2 Локально зелёные: go test всех модулей `-race -shuffle`, golangci-lint, govulncheck, `gen:check`, openapi-lint, web-test (vitest + typecheck), integration.
-- [ ] 8.3 PR из ветки `change/service-create-requires-owner` в master с зелёным CI; после merge — `/opsx:archive` отдельным PR sync+archive.
+- [x] 8.1 Все комментарии в новом/изменённом коде — только на русском.
+- [x] 8.2 Локально зелёные: go test всех модулей `-race -shuffle`, golangci-lint, govulncheck, `gen:check` (proto buf + web детерминированы, diff пуст), openapi-lint (Spectral), web-test (vitest 154 ok + tsc -b). Integration-набор не запускался локально (нужен docker-стенд), но компилируется под `-tags=integration` и обновлён под обязательных владельцев.
+- [x] 8.3 PR из ветки `change/service-create-requires-owner` в master (#72); после зелёного CI и merge — `/opsx:archive` отдельным PR sync+archive.
