@@ -22,13 +22,18 @@ export type Step = { key: string; label: string; state: StepState };
 // OPERATION_STEPS — статические упорядоченные шаги по операции. Порядок и подписи
 // соответствуют порядку активностей соответствующего воркфлоу projects.
 export const OPERATION_STEPS: Record<Operation, { key: string; label: string }[]> = {
-  // CreateServiceWorkflow: GitLab → Harbor → Vault → инъекция секретов → активация.
+  // CreateServiceWorkflow (вариант B): GitLab репозиторий → назначение владельцев в
+  // GitLab → Harbor → Vault AppRole → выдача доступа владельцам в Vault → инъекция
+  // секретов → активация → назначение ролей владельцев в IDM.
   create: [
     { key: "gitlab", label: "Создание репозитория GitLab" },
+    { key: "gitlab-owners", label: "Назначение владельцев в GitLab" },
     { key: "harbor", label: "Создание проекта образов Harbor" },
     { key: "vault", label: "Настройка секретов Vault" },
+    { key: "vault-owners", label: "Выдача доступа владельцам в Vault" },
     { key: "secrets", label: "Инъекция секретов в CI" },
     { key: "activate", label: "Активация сервиса" },
+    { key: "idm-owners", label: "Назначение ролей владельцев в IDM" },
   ],
   // ChangeOwnersWorkflow — короткий воркфлоу (GitLab → Vault → каталог → IDM);
   // статус сервиса не меняется, поэтому показываем вырожденный одношаговый степпер.

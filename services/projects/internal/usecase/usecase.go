@@ -30,7 +30,10 @@ type Store interface {
 // Узкий интерфейс изолирует usecase от Temporal SDK и позволяет подменять его
 // фейком в тестах.
 type WorkflowStarter interface {
-	StartCreateService(ctx context.Context, serviceID, project, name string) error
+	// StartCreateService запускает workflow «Создание сервиса». owners —
+	// нормализованный набор владельцев, устанавливаемых воркфлоу во внешних
+	// системах (GitLab/Vault/IDM, вариант B ADR-0023).
+	StartCreateService(ctx context.Context, serviceID, project, name string, owners []string) error
 	// StartChangeOwners запускает workflow «Изменение владельцев». desired —
 	// нормализованный желаемый набор, previous — текущий набор (для diff/
 	// компенсаций), expectedVersion — версия для guarded-CAS каталога.
@@ -79,14 +82,16 @@ func (c *Catalog) List(ctx context.Context, project string, pageSize int, pageTo
 	return c.store.List(ctx, project, pageSize, pageToken)
 }
 
-// CreateRecord вставляет запись со статусом CREATING БЕЗ запуска workflow.
+// CreateRecord вставляет запись со статусом CREATING (вместе с владельцами,
+// атомарно) БЕЗ запуска workflow. owners ожидаются уже нормализованными.
 // Используется как первый шаг CreateService и в сценариях, где запуск не нужен.
-func (c *Catalog) CreateRecord(ctx context.Context, project, name string) (repository.Service, error) {
+func (c *Catalog) CreateRecord(ctx context.Context, project, name string, owners []string) (repository.Service, error) {
 	s := repository.Service{
 		ID:      uuid.New(),
 		Project: project,
 		Name:    name,
 		Status:  repository.StatusCreating,
+		Owners:  owners,
 	}
 	if err := c.store.Create(ctx, s); err != nil {
 		return repository.Service{}, fmt.Errorf("usecase: создание записи каталога: %w", err)
@@ -213,21 +218,28 @@ func normalizeOwners(in []string) []string {
 	return out
 }
 
-// CreateService фиксирует запись каталога (status=CREATING) и затем запускает
-// Temporal-workflow «Создание сервиса» с детерминированным WorkflowID.
+// CreateService фиксирует запись каталога (status=CREATING) ВМЕСТЕ с владельцами
+// и затем запускает Temporal-workflow «Создание сервиса» с детерминированным
+// WorkflowID. Владельцы обязательны: входной набор нормализуется (trim/dedup/sort)
+// и при пустом результате создание отклоняется (errs.ErrValidation) ДО вставки и
+// запуска workflow — создание без владельцев невозможно (ADR-0011/0023).
 // Порядок строгий: запись фиксируется ПЕРВОЙ, и только при успешной вставке
 // стартует workflow (workflow не стартует при неуспешной вставке). Если запуск
 // workflow не удался, запись best-effort переводится в FAILED, чтобы не
 // оставлять её «висящей» в CREATING без исполнителя.
-func (c *Catalog) CreateService(ctx context.Context, project, name string) (repository.Service, error) {
+func (c *Catalog) CreateService(ctx context.Context, project, name string, owners []string) (repository.Service, error) {
 	if c.starter == nil {
 		return repository.Service{}, fmt.Errorf("usecase: запуск workflow не сконфигурирован")
 	}
-	s, err := c.CreateRecord(ctx, project, name)
+	desired := normalizeOwners(owners)
+	if len(desired) == 0 {
+		return repository.Service{}, fmt.Errorf("usecase: создание сервиса требует хотя бы одного владельца: %w", errs.ErrValidation)
+	}
+	s, err := c.CreateRecord(ctx, project, name, desired)
 	if err != nil {
 		return repository.Service{}, err
 	}
-	if err := c.starter.StartCreateService(ctx, s.ID.String(), project, name); err != nil {
+	if err := c.starter.StartCreateService(ctx, s.ID.String(), project, name, desired); err != nil {
 		// Best-effort: запись без исполнителя переводим в FAILED (guarded-CAS).
 		if terr := c.store.TransitionStatus(ctx, s.ID, repository.StatusCreating, repository.StatusFailed); terr != nil {
 			return repository.Service{}, fmt.Errorf("usecase: запуск workflow не удался (%w); перевод в FAILED не удался: %w", err, terr)

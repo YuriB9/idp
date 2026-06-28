@@ -447,7 +447,13 @@ type CreateServiceRequest struct {
 	// project — идентификатор проекта-владельца.
 	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
 	// name — имя создаваемого сервиса внутри проекта.
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// owners — ОБЯЗАТЕЛЬНЫЙ набор владельцев создаваемого сервиса. Сервер
+	// нормализует (без пустых строк и дублей) и устанавливает атомарно с записью
+	// каталога; минимум один непустой владелец после нормализации (создание без
+	// владельцев недопустимо, ADR-0011/0023). BREAKING: добавление обязательного
+	// поля в существующее сообщение запроса.
+	Owners        []string `protobuf:"bytes,3,rep,name=owners,proto3" json:"owners,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -494,6 +500,13 @@ func (x *CreateServiceRequest) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *CreateServiceRequest) GetOwners() []string {
+	if x != nil {
+		return x.Owners
+	}
+	return nil
 }
 
 type CreateServiceResponse struct {
@@ -927,10 +940,11 @@ const file_projects_v1_projects_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"p\n" +
 	"\x14ListServicesResponse\x120\n" +
 	"\bservices\x18\x01 \x03(\v2\x14.projects.v1.ServiceR\bservices\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"D\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\\\n" +
 	"\x14CreateServiceRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"[\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06owners\x18\x03 \x03(\tR\x06owners\"[\n" +
 	"\x15CreateServiceResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1a.projects.v1.ServiceStatusR\x06status\"\x8a\x01\n" +

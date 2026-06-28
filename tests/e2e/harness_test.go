@@ -336,7 +336,11 @@ func requireStack(t *testing.T) {
 // сценариями, которым нужен заранее готовый активный сервис.
 func mustCreateActive(t *testing.T, token, project, name string) {
 	t.Helper()
-	res := callAPI(t, token, http.MethodPost, "/projects/"+project+"/services", map[string]string{"name": name})
+	// Владельцы обязательны при создании (ADR-0023): задаём субъекта-владельца из
+	// realm. Для сценариев, которым нужен конкретный состав владельцев, см.
+	// прямой вызов createService с нужным набором.
+	res := callAPI(t, token, http.MethodPost, "/projects/"+project+"/services",
+		map[string]any{"name": name, "owners": []string{subjAlice}})
 	if res.status != http.StatusCreated {
 		t.Fatalf("createService(%s/%s): ожидался 201, получен %d (%s)", project, name, res.status, string(res.body))
 	}

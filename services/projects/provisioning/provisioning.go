@@ -46,7 +46,35 @@ const (
 	ActivityTransitionActive = "CatalogTransitionActive"
 	// ActivityTransitionFailed — guarded-CAS перевод записи CREATING→FAILED.
 	ActivityTransitionFailed = "CatalogTransitionFailed"
+	// Activities назначения владельцев при создании (вариант B, ADR-0011/0023).
+	// Реализации живут в DevInfra worker'е и переиспользуются из сценария смены
+	// владельцев. Пакет provisioning НЕ может импортировать changeowners (тот
+	// зависит от provisioning), поэтому имена дублируются здесь; они ДОЛЖНЫ
+	// совпадать с именами в changeowners.
+	// ActivityGitLabSyncMembers — назначить владельцев участниками репозитория GitLab.
+	ActivityGitLabSyncMembers = "GitLabSyncMembers"
+	// ActivityVaultSyncOwners — выдать владельцам политики доступа Vault.
+	ActivityVaultSyncOwners = "VaultSyncOwners"
+	// ActivityIDMSyncOwnerRoles — выдать владельцам роли в IDM (после активации).
+	ActivityIDMSyncOwnerRoles = "IDMSyncOwnerRoles"
 )
+
+// SyncOwnersInput — вход activities назначения владельцев по diff. JSON-форма
+// ДОЛЖНА совпадать с changeowners.SyncMembersInput (Ref/Add/Remove), чтобы worker
+// мог десериализовать аргумент в свой тип activity.
+type SyncOwnersInput struct {
+	Ref    ResourceRef
+	Add    []string
+	Remove []string
+}
+
+// IDMSyncOwnersInput — вход activity синхронизации ролей IDM по diff владельцев.
+// JSON-форма ДОЛЖНА совпадать с changeowners.IDMSyncInput (Project/Add/Remove).
+type IDMSyncOwnersInput struct {
+	Project string
+	Add     []string
+	Remove  []string
+}
 
 // WorkflowID возвращает детерминированный идентификатор workflow для пары
 // (project, name). Стабильность ID обеспечивает идемпотентность повторного
@@ -64,6 +92,10 @@ type CreateServiceInput struct {
 	Project string
 	// Name — имя создаваемого сервиса.
 	Name string
+	// Owners — нормализованный набор владельцев, устанавливаемых воркфлоу во
+	// внешних системах (GitLab members → Vault policies → IDM owner roles,
+	// вариант B ADR-0023). В каталог владельцы уже записаны атомарно при вставке.
+	Owners []string
 }
 
 // ResourceRef — общий аргумент activities провизии и компенсаций.
@@ -123,14 +155,21 @@ func activityOptions() workflow.ActivityOptions {
 	}
 }
 
-// CreateServiceWorkflow оркеструет провизию сервиса: GitLab → Harbor → Vault →
-// инъекция секретов → перевод записи в ACTIVE. При фатальном (non-retryable)
-// сбое выполняет Saga-компенсации в обратном порядке и переводит запись в
-// FAILED (ADR-0005). Тело детерминировано: I/O только через activities.
+// CreateServiceWorkflow оркеструет провизию сервиса (вариант B, ADR-0023):
+// GitLab репозиторий → назначение владельцев в GitLab → Harbor → Vault AppRole →
+// выдача доступа владельцам в Vault → инъекция секретов → перевод записи в ACTIVE
+// → выдача ролей владельцев в IDM. Владельцы берутся из in.Owners (в каталог они
+// уже записаны атомарно при вставке). При фатальном (non-retryable) сбое ДО
+// активации выполняет Saga-компенсации в обратном порядке и переводит запись в
+// FAILED (ADR-0005); компенсации членства GitLab и политик Vault поглощаются
+// удалением соответствующего ресурса (delete repo / teardown Vault). Сбой выдачи
+// ролей IDM ПОСЛЕ активации не откатывает созданное — алерт оператору (каталог —
+// источник правды, ADR-0005/0008). Тело детерминировано: I/O только через
+// activities.
 func CreateServiceWorkflow(ctx workflow.Context, in CreateServiceInput) error {
 	ctx = workflow.WithActivityOptions(ctx, activityOptions())
 	log := workflow.GetLogger(ctx)
-	ref := ResourceRef(in)
+	ref := ResourceRef{ServiceID: in.ServiceID, Project: in.Project, Name: in.Name}
 
 	// comps — компенсации успешно выполненных шагов; запускаются в обратном
 	// порядке при фатальном сбое. Храним замыкания в памяти исполнения workflow.
@@ -161,6 +200,10 @@ func CreateServiceWorkflow(ctx workflow.Context, in CreateServiceInput) error {
 		return fmt.Errorf("create-service: провизия не удалась: %w", cause)
 	}
 
+	// owners — назначаемые владельцы. В каталоге они уже зафиксированы при вставке;
+	// здесь устанавливаем их роли во внешних системах (add=owners, remove=[]).
+	owners := in.Owners
+
 	// 1. GitLab: репозиторий.
 	var repo GitLabRepo
 	if err := workflow.ExecuteActivity(ctx, ActivityGitLabCreateRepo, ref).Get(ctx, &repo); err != nil {
@@ -169,14 +212,21 @@ func CreateServiceWorkflow(ctx workflow.Context, in CreateServiceInput) error {
 	}
 	addComp(ActivityGitLabDeleteRepo, ref)
 
-	// 2. Harbor: директория образов + Robot Account.
+	// 2. GitLab: назначить владельцев участниками репозитория. Отдельная
+	// компенсация не нужна — удаление репозитория (шаг 1) снимает и членство.
+	gitlabOwners := SyncOwnersInput{Ref: ref, Add: owners, Remove: nil}
+	if err := workflow.ExecuteActivity(ctx, ActivityGitLabSyncMembers, gitlabOwners).Get(ctx, nil); err != nil {
+		return fail(err)
+	}
+
+	// 3. Harbor: директория образов + Robot Account.
 	var harbor HarborResult
 	if err := workflow.ExecuteActivity(ctx, ActivityHarborCreate, ref).Get(ctx, &harbor); err != nil {
 		return fail(err)
 	}
 	addComp(ActivityHarborDelete, ref)
 
-	// 3. Vault: политики + AppRole. При окончательной недоступности Vault —
+	// 4. Vault: политики + AppRole. При окончательной недоступности Vault —
 	// полный откат (Harbor, затем GitLab) через fail (ADR-0005).
 	var vault VaultResult
 	if err := workflow.ExecuteActivity(ctx, ActivityVaultSetup, ref).Get(ctx, &vault); err != nil {
@@ -184,19 +234,36 @@ func CreateServiceWorkflow(ctx workflow.Context, in CreateServiceInput) error {
 	}
 	addComp(ActivityVaultTeardown, ref)
 
-	// 4. Инъекция секретов Vault/Harbor в CI/CD-переменные GitLab.
+	// 5. Vault: выдать владельцам политики доступа. Отдельная компенсация не нужна —
+	// teardown Vault (шаг 4) снимает и политики владельцев.
+	vaultOwners := SyncOwnersInput{Ref: ref, Add: owners, Remove: nil}
+	if err := workflow.ExecuteActivity(ctx, ActivityVaultSyncOwners, vaultOwners).Get(ctx, nil); err != nil {
+		return fail(err)
+	}
+
+	// 6. Инъекция секретов Vault/Harbor в CI/CD-переменные GitLab.
 	inject := InjectSecretsInput{Ref: ref, GitLab: repo, Harbor: harbor, Vault: vault}
 	if err := workflow.ExecuteActivity(ctx, ActivityInjectSecrets, inject).Get(ctx, nil); err != nil {
 		return fail(err)
 	}
 
-	// 5. Успех: guarded-CAS CREATING→ACTIVE.
+	// 7. Успех: guarded-CAS CREATING→ACTIVE.
 	if err := workflow.ExecuteActivity(ctx, ActivityTransitionActive, ref).Get(ctx, nil); err != nil {
 		// Ресурсы созданы, но финальный переход проигран (статус уже не CREATING).
 		// Не откатываем созданное; фиксируем для оператора.
 		log.Error("create-service: ALERT оператору — перевод записи в ACTIVE не удался",
 			"service_id", in.ServiceID, "err", err)
 		return fmt.Errorf("create-service: перевод в ACTIVE не удался: %w", err)
+	}
+
+	// 8. IDM: выдать роли владельцев. ПОСЛЕ активации — без молчаливого отката:
+	// ретраи идемпотентны (RetryPolicy), при исчерпании — алерт оператору, каталог
+	// остаётся источником правды (ADR-0005/0008).
+	idmOwners := IDMSyncOwnersInput{Project: in.Project, Add: owners, Remove: nil}
+	if err := workflow.ExecuteActivity(ctx, ActivityIDMSyncOwnerRoles, idmOwners).Get(ctx, nil); err != nil {
+		log.Error("create-service: ALERT оператору — выдача ролей владельцев в IDM не удалась после активации",
+			"service_id", in.ServiceID, "project", in.Project, "name", in.Name, "err", err)
+		return fmt.Errorf("create-service: выдача ролей владельцев в IDM не удалась: %w", err)
 	}
 	return nil
 }

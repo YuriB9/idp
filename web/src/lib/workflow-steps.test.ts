@@ -27,6 +27,20 @@ describe("buildSteps", () => {
       { key: "owners", label: "Применение состава владельцев", state: "done" },
     ]);
   });
+
+  it("создание (вариант B) включает шаги назначения владельцев в нужном порядке", () => {
+    const keys = OPERATION_STEPS.create.map((s) => s.key);
+    expect(keys).toEqual([
+      "gitlab",
+      "gitlab-owners",
+      "harbor",
+      "vault",
+      "vault-owners",
+      "secrets",
+      "activate",
+      "idm-owners",
+    ]);
+  });
 });
 
 describe("createPhase", () => {

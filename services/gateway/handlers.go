@@ -118,7 +118,8 @@ type serviceList struct {
 
 // createServiceBody — тело запроса создания (схема CreateServiceRequest).
 type createServiceBody struct {
-	Name string `json:"name"`
+	Name   string   `json:"name"`
+	Owners []string `json:"owners"`
 }
 
 // createServiceResult — тело ответа создания (схема CreateServiceResult).
@@ -159,10 +160,30 @@ func (a *servicesAPI) create(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, r, http.StatusBadRequest, "имя сервиса обязательно")
 		return
 	}
+	// Владельцы обязательны при создании (ADR-0023): непустой набор, без пустых
+	// строк и без дублей. Синхронная валидация на периметре → 400 без сырых
+	// деталей; до проксирования в gRPC.
+	if len(body.Owners) == 0 {
+		a.writeError(w, r, http.StatusBadRequest, "при создании укажите хотя бы одного владельца")
+		return
+	}
+	seen := map[string]bool{}
+	for _, o := range body.Owners {
+		if o == "" {
+			a.writeError(w, r, http.StatusBadRequest, "владелец не может быть пустым")
+			return
+		}
+		if seen[o] {
+			a.writeError(w, r, http.StatusBadRequest, "владельцы не должны дублироваться")
+			return
+		}
+		seen[o] = true
+	}
 
 	resp, err := a.client.CreateService(r.Context(), &projectsv1.CreateServiceRequest{
 		Project: project,
 		Name:    body.Name,
+		Owners:  body.Owners,
 	})
 	if err != nil {
 		a.writeGRPCError(w, r, err)

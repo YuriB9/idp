@@ -29,6 +29,7 @@ type fakeCatalog struct {
 	listNext  string
 
 	createCalled bool
+	gotOwners    []string
 
 	// поля для SetServiceOwners
 	ownersErr    error
@@ -55,8 +56,9 @@ func (f *fakeCatalog) List(context.Context, string, int, string) ([]repository.S
 	return f.listItem, f.listNext, f.listErr
 }
 
-func (f *fakeCatalog) CreateService(context.Context, string, string) (repository.Service, error) {
+func (f *fakeCatalog) CreateService(_ context.Context, _, _ string, owners []string) (repository.Service, error) {
 	f.createCalled = true
+	f.gotOwners = owners
 	return f.svc, f.createErr
 }
 
@@ -179,19 +181,31 @@ func TestCreateServiceMapping(t *testing.T) {
 	}{
 		{
 			name:     "успех → CREATING",
-			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n", Owners: []string{"alice"}},
 			fake:     &fakeCatalog{svc: repository.Service{ID: id, Project: "p", Name: "n", Status: repository.StatusCreating}},
 			wantCode: codes.OK,
 		},
 		{
 			name:     "пустой name → InvalidArgument",
-			req:      &projectsv1.CreateServiceRequest{Project: "p"},
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Owners: []string{"alice"}},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "без владельцев → InvalidArgument",
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
+			fake:     &fakeCatalog{},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "пустой владелец → InvalidArgument",
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n", Owners: []string{""}},
 			fake:     &fakeCatalog{},
 			wantCode: codes.InvalidArgument,
 		},
 		{
 			name:     "конфликт → Aborted",
-			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n"},
+			req:      &projectsv1.CreateServiceRequest{Project: "p", Name: "n", Owners: []string{"alice"}},
 			fake:     &fakeCatalog{createErr: fmt.Errorf("обёртка: %w", errs.ErrConflict)},
 			wantCode: codes.Aborted,
 		},
@@ -246,7 +260,7 @@ func TestCreateServiceRBAC(t *testing.T) {
 			fake := &fakeCatalog{svc: repository.Service{ID: uuid.New(), Project: "p", Name: "n", Status: repository.StatusCreating}}
 			srv := New(fake, tc.idm, discardLogger())
 
-			_, err := srv.CreateService(context.Background(), &projectsv1.CreateServiceRequest{Project: "p", Name: "n"})
+			_, err := srv.CreateService(context.Background(), &projectsv1.CreateServiceRequest{Project: "p", Name: "n", Owners: []string{"alice"}})
 			st, ok := status.FromError(err)
 			if !ok || st.Code() != codes.PermissionDenied {
 				t.Fatalf("ожидали PermissionDenied, получили %v", err)

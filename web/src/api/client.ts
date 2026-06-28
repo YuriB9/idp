@@ -23,7 +23,10 @@ const ServiceList = z
   .passthrough();
 const Error = z.object({ error: z.string() }).passthrough();
 const CreateServiceRequest = z
-  .object({ name: z.string().min(1) })
+  .object({
+    name: z.string().min(1),
+    owners: z.array(z.string().min(1)).min(1),
+  })
   .passthrough();
 const CreateServiceResult = z
   .object({ id: z.string(), status: ServiceStatus })
@@ -670,7 +673,7 @@ const endpoints = makeApi([
       {
         name: "body",
         type: "Body",
-        schema: z.object({ name: z.string().min(1) }).passthrough(),
+        schema: CreateServiceRequest,
       },
       {
         name: "project",
