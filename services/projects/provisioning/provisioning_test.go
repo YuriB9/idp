@@ -24,6 +24,14 @@ type mockActs struct {
 	gitlabAttempts  int  // счётчик попыток CreateRepo
 	vaultFatal      bool // VaultSetupAppRole вернёт non-retryable → ветка компенсации
 	harborDelFail   bool // компенсация HarborDelete упадёт (проверка alert+FAILED)
+	gitlabSyncFatal bool // GitLabSyncMembers вернёт non-retryable → компенсация
+	vaultSyncFatal  bool // VaultSyncOwners вернёт non-retryable → компенсация
+	idmFatal        bool // IDMSyncOwnerRoles (после активации) вернёт non-retryable
+
+	// Захваченные владельцы из шагов назначения (для проверки add=owners).
+	gitlabOwners []string
+	vaultOwners  []string
+	idmOwners    []string
 }
 
 func (m *mockActs) record(name string) {
@@ -98,6 +106,39 @@ func (m *mockActs) CatalogTransitionFailed(_ context.Context, _ provisioning.Res
 	return nil
 }
 
+func (m *mockActs) GitLabSyncMembers(_ context.Context, in provisioning.SyncOwnersInput) error {
+	m.record(provisioning.ActivityGitLabSyncMembers)
+	m.mu.Lock()
+	m.gitlabOwners = in.Add
+	m.mu.Unlock()
+	if m.gitlabSyncFatal {
+		return temporal.NewNonRetryableApplicationError("назначение владельцев GitLab не удалось", "ProvisioningFatal", nil)
+	}
+	return nil
+}
+
+func (m *mockActs) VaultSyncOwners(_ context.Context, in provisioning.SyncOwnersInput) error {
+	m.record(provisioning.ActivityVaultSyncOwners)
+	m.mu.Lock()
+	m.vaultOwners = in.Add
+	m.mu.Unlock()
+	if m.vaultSyncFatal {
+		return temporal.NewNonRetryableApplicationError("выдача политик Vault не удалась", "ProvisioningFatal", nil)
+	}
+	return nil
+}
+
+func (m *mockActs) IDMSyncOwnerRoles(_ context.Context, in provisioning.IDMSyncOwnersInput) error {
+	m.record(provisioning.ActivityIDMSyncOwnerRoles)
+	m.mu.Lock()
+	m.idmOwners = in.Add
+	m.mu.Unlock()
+	if m.idmFatal {
+		return temporal.NewNonRetryableApplicationError("выдача ролей IDM не удалась", "ProvisioningFatal", nil)
+	}
+	return nil
+}
+
 // register регистрирует mock-activities под именами контракта.
 func (m *mockActs) register(env interface {
 	RegisterActivityWithOptions(a any, options activity.RegisterOptions)
@@ -112,6 +153,9 @@ func (m *mockActs) register(env interface {
 	reg(m.VaultTeardownAppRole, provisioning.ActivityVaultTeardown)
 	reg(m.CatalogTransitionActive, provisioning.ActivityTransitionActive)
 	reg(m.CatalogTransitionFailed, provisioning.ActivityTransitionFailed)
+	reg(m.GitLabSyncMembers, provisioning.ActivityGitLabSyncMembers)
+	reg(m.VaultSyncOwners, provisioning.ActivityVaultSyncOwners)
+	reg(m.IDMSyncOwnerRoles, provisioning.ActivityIDMSyncOwnerRoles)
 }
 
 func contains(s []string, v string) bool {
@@ -142,24 +186,33 @@ func TestCreateServiceWorkflow_HappyPath(t *testing.T) {
 	m := &mockActs{}
 	m.register(env)
 
+	owners := []string{"alice", "bob"}
 	env.ExecuteWorkflow(provisioning.CreateServiceWorkflow, provisioning.CreateServiceInput{
-		ServiceID: "svc-id", Project: "p1", Name: "svc",
+		ServiceID: "svc-id", Project: "p1", Name: "svc", Owners: owners,
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 
 	order := m.order()
-	// Порядок провизии: GitLab → Harbor → Vault → инъекция → ACTIVE.
+	// Порядок провизии (вариант B): GitLab repo → GitLab members → Harbor →
+	// Vault setup → Vault policies → инъекция → ACTIVE → IDM roles.
 	require.Equal(t, []string{
 		provisioning.ActivityGitLabCreateRepo,
+		provisioning.ActivityGitLabSyncMembers,
 		provisioning.ActivityHarborCreate,
 		provisioning.ActivityVaultSetup,
+		provisioning.ActivityVaultSyncOwners,
 		provisioning.ActivityInjectSecrets,
 		provisioning.ActivityTransitionActive,
+		provisioning.ActivityIDMSyncOwnerRoles,
 	}, order)
 	require.False(t, contains(order, provisioning.ActivityTransitionFailed))
 	require.False(t, contains(order, provisioning.ActivityGitLabDeleteRepo))
+	// Владельцы из входа доводятся до всех шагов назначения (add=owners).
+	require.Equal(t, owners, m.gitlabOwners)
+	require.Equal(t, owners, m.vaultOwners)
+	require.Equal(t, owners, m.idmOwners)
 }
 
 // TestCreateServiceWorkflow_RetryThenSuccess: транзиентные сбои GitLab
@@ -227,4 +280,62 @@ func TestCreateServiceWorkflow_CompensationFailureStillFails(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 	require.True(t, contains(m.order(), provisioning.ActivityTransitionFailed))
+}
+
+// TestCreateServiceWorkflow_VaultSyncOwnersFatalCompensates: non-retryable сбой
+// шага выдачи политик владельцам Vault (после Vault setup) → полный откат
+// (teardown Vault, удаление Harbor, удаление GitLab) и перевод в FAILED. ACTIVE и
+// IDM не вызываются.
+func TestCreateServiceWorkflow_VaultSyncOwnersFatalCompensates(t *testing.T) {
+	t.Parallel()
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestWorkflowEnvironment()
+	m := &mockActs{vaultSyncFatal: true}
+	m.register(env)
+
+	env.ExecuteWorkflow(provisioning.CreateServiceWorkflow, provisioning.CreateServiceInput{
+		ServiceID: "svc-id", Project: "p1", Name: "svc", Owners: []string{"alice"},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+
+	order := m.order()
+	// Компенсации в обратном порядке: Vault teardown → Harbor delete → GitLab delete.
+	require.True(t, contains(order, provisioning.ActivityVaultTeardown))
+	require.True(t, contains(order, provisioning.ActivityHarborDelete))
+	require.True(t, contains(order, provisioning.ActivityGitLabDeleteRepo))
+	require.Less(t, indexOf(order, provisioning.ActivityVaultTeardown), indexOf(order, provisioning.ActivityHarborDelete))
+	require.Less(t, indexOf(order, provisioning.ActivityHarborDelete), indexOf(order, provisioning.ActivityGitLabDeleteRepo))
+	require.True(t, contains(order, provisioning.ActivityTransitionFailed))
+	require.False(t, contains(order, provisioning.ActivityTransitionActive))
+	require.False(t, contains(order, provisioning.ActivityIDMSyncOwnerRoles))
+}
+
+// TestCreateServiceWorkflow_IDMRolesFatalKeepsActive: сбой выдачи ролей IDM ПОСЛЕ
+// активации не откатывает созданное (каталог — источник правды, ADR-0005/0008):
+// запись остаётся ACTIVE (TransitionFailed и компенсации не вызываются), но
+// workflow завершается ошибкой (сбой не проглатывается, алерт оператору).
+func TestCreateServiceWorkflow_IDMRolesFatalKeepsActive(t *testing.T) {
+	t.Parallel()
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestWorkflowEnvironment()
+	m := &mockActs{idmFatal: true}
+	m.register(env)
+
+	env.ExecuteWorkflow(provisioning.CreateServiceWorkflow, provisioning.CreateServiceInput{
+		ServiceID: "svc-id", Project: "p1", Name: "svc", Owners: []string{"alice"},
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+
+	order := m.order()
+	require.True(t, contains(order, provisioning.ActivityTransitionActive))
+	require.True(t, contains(order, provisioning.ActivityIDMSyncOwnerRoles))
+	// Без отката: запись не переводится в FAILED, ресурсы не удаляются.
+	require.False(t, contains(order, provisioning.ActivityTransitionFailed))
+	require.False(t, contains(order, provisioning.ActivityGitLabDeleteRepo))
+	require.False(t, contains(order, provisioning.ActivityHarborDelete))
+	require.False(t, contains(order, provisioning.ActivityVaultTeardown))
 }

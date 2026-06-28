@@ -19,12 +19,13 @@ func TestErrorCreateConflict(t *testing.T) {
 	name := uniqueName("e2e-conflict")
 	path := "/projects/" + projectDemo + "/services"
 
-	res := callAPI(t, token, http.MethodPost, path, map[string]string{"name": name})
+	body := map[string]any{"name": name, "owners": []string{subjAlice}}
+	res := callAPI(t, token, http.MethodPost, path, body)
 	if res.status != http.StatusCreated {
 		t.Fatalf("первый createService: ожидался 201, получен %d (%s)", res.status, string(res.body))
 	}
 	// Повтор до завершения первого — конфликт.
-	res = callAPI(t, token, http.MethodPost, path, map[string]string{"name": name})
+	res = callAPI(t, token, http.MethodPost, path, body)
 	if res.status != http.StatusConflict {
 		t.Fatalf("повторный createService: ожидался 409, получен %d (%s)", res.status, string(res.body))
 	}
@@ -38,24 +39,26 @@ func TestErrorOwnersVersionConflict(t *testing.T) {
 	token := fetchIDToken(t, userDev, userDev)
 	name := uniqueName("e2e-ownver")
 
+	// После создания владелец — subjAlice, owners_version=1 (атомарно, ADR-0023).
 	mustCreateActive(t, token, projectDemo, name)
 
-	// Успешно поднимаем версию 0→1 и ждём отражения в каталоге (асинхронно).
+	// Успешно поднимаем версию 1→2 ({alice}→{alice,bob}) и ждём отражения в
+	// каталоге (асинхронно).
 	res := callAPI(t, token, http.MethodPut, "/projects/"+projectDemo+"/services/"+name+"/owners",
-		map[string]any{"owners": []string{subjAlice}, "owners_version": 0})
+		map[string]any{"owners": []string{subjAlice, subjBob}, "owners_version": 1})
 	if res.status != http.StatusOK {
 		t.Fatalf("setServiceOwners: ожидался 200, получен %d (%s)", res.status, string(res.body))
 	}
-	waitForOwnersVersion(t, token, projectDemo, name, 1)
-	// Повтор с устаревшей версией 0 → конфликт.
+	waitForOwnersVersion(t, token, projectDemo, name, 2)
+	// Повтор с устаревшей версией 1 → конфликт.
 	res = callAPI(t, token, http.MethodPut, "/projects/"+projectDemo+"/services/"+name+"/owners",
-		map[string]any{"owners": []string{subjBob}, "owners_version": 0})
+		map[string]any{"owners": []string{subjBob}, "owners_version": 1})
 	if res.status != http.StatusConflict {
 		t.Fatalf("setServiceOwners(stale): ожидался 409, получен %d (%s)", res.status, string(res.body))
 	}
 	// Набор владельцев не изменён конфликтной попыткой.
 	s := getServiceOK(t, token, projectDemo, name)
-	if !sameSet(s.Owners, []string{subjAlice}) {
+	if !sameSet(s.Owners, []string{subjAlice, subjBob}) {
 		t.Fatalf("конфликтная попытка изменила владельцев: got=%v", s.Owners)
 	}
 }
@@ -145,7 +148,8 @@ func TestSagaRollbackOnVaultFailure(t *testing.T) {
 	// Имя с маркером sagafail → мок Vault вернёт 400 на политике.
 	name := uniqueName("sagafail")
 
-	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services", map[string]string{"name": name})
+	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services",
+		map[string]any{"name": name, "owners": []string{subjAlice}})
 	if res.status != http.StatusCreated {
 		t.Fatalf("createService(sagafail): ожидался 201, получен %d (%s)", res.status, string(res.body))
 	}

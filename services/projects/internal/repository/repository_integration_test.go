@@ -70,6 +70,45 @@ func TestIntegrationUniqueName(t *testing.T) {
 	}
 }
 
+// TestIntegrationCreateWithOwners проверяет атомарную вставку записи вместе с
+// владельцами (ADR-0023): запись содержит непустой набор владельцев и стартовую
+// owners_version=1, а дубль (project, name) → ErrConflict без частичной вставки.
+func TestIntegrationCreateWithOwners(t *testing.T) {
+	pool := testPool(t)
+	defer pool.Close()
+
+	repo := New(pool)
+	ctx := context.Background()
+	const project = "it-create-owners"
+	cleanupProject(t, pool, project)
+	defer cleanupProject(t, pool, project)
+
+	id := uuid.New()
+	svc := Service{ID: id, Project: project, Name: "svc", Status: StatusCreating, Owners: []string{"alice", "bob"}}
+	if err := repo.Create(ctx, svc); err != nil {
+		t.Fatalf("вставка с владельцами: %v", err)
+	}
+
+	got, err := repo.GetByName(ctx, project, "svc")
+	if err != nil {
+		t.Fatalf("чтение: %v", err)
+	}
+	if got.OwnersVersion != 1 {
+		t.Fatalf("ожидали owners_version=1, получили %d", got.OwnersVersion)
+	}
+	if len(got.Owners) != 2 || got.Owners[0] != "alice" || got.Owners[1] != "bob" {
+		t.Fatalf("ожидали владельцев [alice bob], получили %v", got.Owners)
+	}
+
+	// Первая последующая смена владельцев ожидает expected_version=1 (консистентно
+	// со стартовой версией создания).
+	if _, ver, serr := repo.SetOwners(ctx, id, []string{"alice", "carol"}, 1); serr != nil {
+		t.Fatalf("SetOwners с expected=1: %v", serr)
+	} else if ver != 2 {
+		t.Fatalf("ожидали версию 2 после смены, получили %d", ver)
+	}
+}
+
 // TestIntegrationGuardedCAS проверяет реальный guarded-CAS: успех из ожидаемого
 // статуса и конфликт при несовпадении.
 func TestIntegrationGuardedCAS(t *testing.T) {

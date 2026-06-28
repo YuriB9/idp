@@ -343,6 +343,8 @@ export interface components {
         CreateServiceRequest: {
             /** @description Имя создаваемого сервиса внутри проекта. */
             name: string;
+            /** @description Обязательный набор владельцев создаваемого сервиса. Минимум один непустой владелец; сервер нормализует (без пустых строк и дублей) и устанавливает атомарно с созданием (ADR-0011/0023). */
+            owners: string[];
         };
         CreateServiceResult: {
             /** @description Идентификатор созданной записи каталога. */

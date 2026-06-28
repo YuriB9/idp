@@ -1,5 +1,6 @@
-// Тест формы создания: happy-path (валидное имя → вызов периметра и переход на
-// экран прогресса) и клиентская валидация (пустое имя → запрос не уходит).
+// Тест формы создания: happy-path (валидное имя + владельцы → вызов периметра и
+// переход на экран прогресса), клиентская валидация (пустое имя → запрос не
+// уходит; отсутствие владельцев → запрос не уходит) и конфликт имени (409).
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -38,16 +39,22 @@ describe("CreateServicePage", () => {
     createService.mockReset();
   });
 
-  it("happy-path: валидное имя → вызов периметра и переход на прогресс", async () => {
+  it("happy-path: имя + владельцы → вызов периметра (нормализованные owners) и переход на прогресс", async () => {
     createService.mockResolvedValue({ id: "id-1", status: "creating" });
     const user = userEvent.setup();
     renderPage();
 
     await user.type(screen.getByLabelText(/Имя сервиса/i), "svc");
+    // Денормализованный ввод владельцев: дубли/беспорядок/запятые → parseOwners
+    // приводит к [alice, bob].
+    await user.type(screen.getByLabelText(/Владельцы/i), "bob, alice\nbob");
     await user.click(screen.getByRole("button", { name: /Создать/i }));
 
     await waitFor(() => expect(createService).toHaveBeenCalledTimes(1));
-    expect(createService).toHaveBeenCalledWith({ name: "svc" }, { params: { project: "demo" } });
+    expect(createService).toHaveBeenCalledWith(
+      { name: "svc", owners: ["alice", "bob"] },
+      { params: { project: "demo" } },
+    );
     expect(await screen.findByText(/экран прогресса/i)).toBeInTheDocument();
   });
 
@@ -55,9 +62,21 @@ describe("CreateServicePage", () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.type(screen.getByLabelText(/Владельцы/i), "alice");
     await user.click(screen.getByRole("button", { name: /Создать/i }));
 
     await screen.findByText(/String must contain at least 1 character|Некорректное имя|Required/i);
+    expect(createService).not.toHaveBeenCalled();
+  });
+
+  it("без владельцев → клиентская валидация, запрос не уходит", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(screen.getByLabelText(/Имя сервиса/i), "svc");
+    await user.click(screen.getByRole("button", { name: /Создать/i }));
+
+    expect(await screen.findByText(/хотя бы одного владельца/i)).toBeInTheDocument();
     expect(createService).not.toHaveBeenCalled();
   });
 
@@ -67,6 +86,7 @@ describe("CreateServicePage", () => {
     renderPage();
 
     await user.type(screen.getByLabelText(/Имя сервиса/i), "svc");
+    await user.type(screen.getByLabelText(/Владельцы/i), "alice");
     await user.click(screen.getByRole("button", { name: /Создать/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/уже существует/i);

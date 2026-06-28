@@ -238,25 +238,20 @@ func TestVaultIntegrationTransfer(t *testing.T) {
 	}
 }
 
-// TestVaultIntegrationChangeOwners проверяет, что смена владельцев РЕАЛЬНО отражается
-// в identity Vault: создаётся entity владельца с политикой роли (через Vault API).
+// TestVaultIntegrationChangeOwners проверяет, что владельцы, заданные при СОЗДАНИИ
+// (вариант B, ADR-0023), РЕАЛЬНО отражаются в identity Vault: воркфлоу создания
+// выполняет VaultSyncOwners до активации, создавая entity владельца с политикой
+// роли (через Vault API).
 func TestVaultIntegrationChangeOwners(t *testing.T) {
 	requireVault(t)
 	t.Parallel()
 	token := fetchIDToken(t, userDev, userDev)
 	name := uniqueName("vault-owners")
 
+	// mustCreateActive создаёт сервис с владельцем subjAlice; статус active
+	// достигается ПОСЛЕ шага VaultSyncOwners, поэтому entity владельца уже создан.
 	mustCreateActive(t, token, projectDemo, name)
 	role := vaultRole(projectDemo, name)
-
-	// Детерминированный change-owners WorkflowID: одна успешная смена владельцев на
-	// сервис (см. память сессии). Задаём владельца alice с версии 0.
-	res := callAPI(t, token, http.MethodPut, "/projects/"+projectDemo+"/services/"+name+"/owners",
-		map[string]any{"owners": []string{subjAlice}, "owners_version": 0})
-	if res.status != http.StatusOK {
-		t.Fatalf("setServiceOwners: ожидался 200, получен %d (%s)", res.status, string(res.body))
-	}
-	waitForOwnersVersion(t, token, projectDemo, name, 1)
 
 	// Vault SyncOwners создаёт entity <role>-<subject> с политикой роли.
 	entity := fmt.Sprintf("%s-%s", role, subjAlice)

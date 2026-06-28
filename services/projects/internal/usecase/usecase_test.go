@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -21,7 +22,7 @@ func TestCreateRecord(t *testing.T) {
 	uc := usecase.New(store)
 	ctx := context.Background()
 
-	got, err := uc.CreateRecord(ctx, "proj", "svc")
+	got, err := uc.CreateRecord(ctx, "proj", "svc", []string{"alice"})
 	if err != nil {
 		t.Fatalf("CreateRecord: неожиданная ошибка: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestCreateRecord(t *testing.T) {
 	}
 
 	// Повторная вставка того же (project, name) → конфликт.
-	if _, err := uc.CreateRecord(ctx, "proj", "svc"); !errors.Is(err, errs.ErrConflict) {
+	if _, err := uc.CreateRecord(ctx, "proj", "svc", []string{"alice"}); !errors.Is(err, errs.ErrConflict) {
 		t.Fatalf("ожидали ErrConflict на дубле, получили %v", err)
 	}
 }
@@ -62,9 +63,10 @@ type fakeStarter struct {
 	gotOwners      []string
 }
 
-func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string) error {
+func (f *fakeStarter) StartCreateService(_ context.Context, serviceID, project, name string, owners []string) error {
 	f.called = true
 	f.gotServiceID, f.gotProject, f.gotName = serviceID, project, name
+	f.gotOwners = owners
 	return f.err
 }
 
@@ -153,7 +155,9 @@ func TestCreateService_StartsWorkflowAfterInsert(t *testing.T) {
 	uc := usecase.New(store, usecase.WithStarter(starter))
 	ctx := context.Background()
 
-	got, err := uc.CreateService(ctx, "proj", "svc")
+	// Владельцы передаются денормализованными (дубли/пробелы/беспорядок) —
+	// usecase нормализует их перед вставкой и запуском.
+	got, err := uc.CreateService(ctx, "proj", "svc", []string{"bob", "alice", "bob", ""})
 	if err != nil {
 		t.Fatalf("CreateService: неожиданная ошибка: %v", err)
 	}
@@ -166,6 +170,15 @@ func TestCreateService_StartsWorkflowAfterInsert(t *testing.T) {
 	if starter.gotServiceID != got.ID.String() || starter.gotProject != "proj" || starter.gotName != "svc" {
 		t.Fatalf("в workflow переданы неверные аргументы: %+v", starter)
 	}
+	// В workflow и в запись переданы нормализованные владельцы (без пустых/дублей,
+	// отсортированы).
+	wantOwners := []string{"alice", "bob"}
+	if !slices.Equal(starter.gotOwners, wantOwners) {
+		t.Fatalf("владельцы в workflow = %v, ожидали %v", starter.gotOwners, wantOwners)
+	}
+	if !slices.Equal(got.Owners, wantOwners) {
+		t.Fatalf("владельцы записи = %v, ожидали %v", got.Owners, wantOwners)
+	}
 	// Запись действительно зафиксирована (insert до запуска).
 	persisted, err := uc.Get(ctx, "proj", "svc")
 	if err != nil {
@@ -173,6 +186,39 @@ func TestCreateService_StartsWorkflowAfterInsert(t *testing.T) {
 	}
 	if persisted.Status != repository.StatusCreating {
 		t.Fatalf("persisted статус = %q, ожидали CREATING", persisted.Status)
+	}
+}
+
+// TestCreateService_EmptyOwnersRejected: создание без владельцев (пустой набор или
+// набор только из пустых строк) отклоняется (ErrValidation) ДО вставки записи и
+// запуска workflow (ADR-0023).
+func TestCreateService_EmptyOwnersRejected(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string][]string{
+		"nil":           nil,
+		"пустой":        {},
+		"пустые строки": {"", ""},
+	}
+	for name, owners := range cases {
+		owners := owners
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := newMemStore()
+			starter := &fakeStarter{}
+			uc := usecase.New(store, usecase.WithStarter(starter))
+			ctx := context.Background()
+
+			if _, err := uc.CreateService(ctx, "proj", "svc", owners); !errors.Is(err, errs.ErrValidation) {
+				t.Fatalf("ожидали ErrValidation, получили %v", err)
+			}
+			if starter.called {
+				t.Fatal("workflow не должен стартовать при пустых владельцах")
+			}
+			if _, err := uc.Get(ctx, "proj", "svc"); !errors.Is(err, errs.ErrNotFound) {
+				t.Fatalf("запись не должна быть создана, получили %v", err)
+			}
+		})
 	}
 }
 
@@ -186,7 +232,7 @@ func TestCreateService_StartFailureMarksFailed(t *testing.T) {
 	uc := usecase.New(store, usecase.WithStarter(starter))
 	ctx := context.Background()
 
-	if _, err := uc.CreateService(ctx, "proj", "svc"); err == nil {
+	if _, err := uc.CreateService(ctx, "proj", "svc", []string{"alice"}); err == nil {
 		t.Fatal("ожидали ошибку при сбое запуска workflow")
 	}
 	persisted, err := uc.Get(ctx, "proj", "svc")
@@ -204,7 +250,7 @@ func TestCreateService_NoStarterConfigured(t *testing.T) {
 	t.Parallel()
 
 	uc := usecase.New(newMemStore())
-	if _, err := uc.CreateService(context.Background(), "proj", "svc"); err == nil {
+	if _, err := uc.CreateService(context.Background(), "proj", "svc", []string{"alice"}); err == nil {
 		t.Fatal("ожидали ошибку при отсутствии starter")
 	}
 }
@@ -396,7 +442,7 @@ func TestGet(t *testing.T) {
 	uc := usecase.New(store)
 	ctx := context.Background()
 
-	created, err := uc.CreateRecord(ctx, "proj", "svc")
+	created, err := uc.CreateRecord(ctx, "proj", "svc", []string{"alice"})
 	if err != nil {
 		t.Fatalf("подготовка: %v", err)
 	}
@@ -541,7 +587,7 @@ func TestListKeysetPagination(t *testing.T) {
 
 	const total = 7
 	for i := range total {
-		if _, err := uc.CreateRecord(ctx, "proj", fmt.Sprintf("svc-%02d", i)); err != nil {
+		if _, err := uc.CreateRecord(ctx, "proj", fmt.Sprintf("svc-%02d", i), []string{"alice"}); err != nil {
 			t.Fatalf("посев %d: %v", i, err)
 		}
 	}

@@ -23,7 +23,10 @@ func TestStoryCreateService(t *testing.T) {
 	token := fetchIDToken(t, userDev, userDev)
 	name := uniqueName("e2e-create")
 
-	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services", map[string]string{"name": name})
+	// Владельцы обязательны при создании (ADR-0023): передаём субъекта-владельца.
+	owners := []string{subjAlice}
+	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services",
+		map[string]any{"name": name, "owners": owners})
 	if res.status != http.StatusCreated {
 		t.Fatalf("createService: ожидался 201, получен %d (%s)", res.status, string(res.body))
 	}
@@ -44,6 +47,33 @@ func TestStoryCreateService(t *testing.T) {
 	if s.Name != name || s.Project != projectDemo {
 		t.Fatalf("getService вернул чужую запись: %+v", s)
 	}
+	// Владельцы установлены атомарно при создании: каталог сразу отражает их,
+	// owners_version=1 (без отдельной смены владельцев).
+	if !sameSet(s.Owners, owners) {
+		t.Fatalf("каталог не отражает владельцев создания: got=%v want=%v", s.Owners, owners)
+	}
+	if s.OwnersVersion != 1 {
+		t.Fatalf("ожидалась owners_version=1 после создания, получена %d", s.OwnersVersion)
+	}
+}
+
+// TestStoryCreateService_RequiresOwners — создание без владельцев отклоняется
+// периметром (ADR-0023): синхронный 400, запись не создаётся.
+func TestStoryCreateService_RequiresOwners(t *testing.T) {
+	requireStack(t)
+	t.Parallel()
+	token := fetchIDToken(t, userDev, userDev)
+	name := uniqueName("e2e-create-noowner")
+
+	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services",
+		map[string]any{"name": name})
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("createService без владельцев: ожидался 400, получен %d (%s)", res.status, string(res.body))
+	}
+	// Запись не создана.
+	if _, code := getService(t, token, projectDemo, name); code != http.StatusNotFound {
+		t.Fatalf("после отказа создания ожидался 404, получен %d", code)
+	}
 }
 
 // TestStoryChangeOwners — user story «Изменение владельцев»: setServiceOwners
@@ -55,18 +85,21 @@ func TestStoryChangeOwners(t *testing.T) {
 	token := fetchIDToken(t, userDev, userDev)
 	name := uniqueName("e2e-owners")
 
+	// mustCreateActive создаёт сервис с владельцем subjAlice и owners_version=1
+	// (владельцы устанавливаются атомарно при создании, ADR-0023).
 	mustCreateActive(t, token, projectDemo, name)
 
-	// Декларативная замена набора владельцев целиком: из пустого набора → alice+bob
-	// (diff add двух владельцев). Сервер вычисляет diff и синхронизирует роли в IDM
-	// (ADR-0011). ПРИМЕЧАНИЕ: повторная успешная смена владельцев того же сервиса
-	// невозможна — детерминированный change-owners WorkflowID с политикой
-	// ALLOW_DUPLICATE_FAILED_ONLY переиспользуется только после неуспеха (свойство
-	// уже реализованного воркфлоу, вне границ этого change), поэтому сценарий
-	// делает ровно одну декларативную замену.
+	// Декларативная замена набора владельцев целиком: {alice} → {alice, bob}
+	// (diff add subjBob), ожидаемая версия — 1 (стартовая после создания). Сервер
+	// вычисляет diff и синхронизирует роли в IDM (ADR-0011). ПРИМЕЧАНИЕ: повторная
+	// успешная смена владельцев того же сервиса невозможна — детерминированный
+	// change-owners WorkflowID с политикой ALLOW_DUPLICATE_FAILED_ONLY
+	// переиспользуется только после неуспеха (свойство уже реализованного
+	// воркфлоу, вне границ этого change), поэтому сценарий делает ровно одну
+	// декларативную замену.
 	owners := []string{subjAlice, subjBob}
 	res := callAPI(t, token, http.MethodPut, "/projects/"+projectDemo+"/services/"+name+"/owners",
-		map[string]any{"owners": owners, "owners_version": 0})
+		map[string]any{"owners": owners, "owners_version": 1})
 	if res.status != http.StatusOK {
 		t.Fatalf("setServiceOwners: ожидался 200, получен %d (%s)", res.status, string(res.body))
 	}
@@ -75,11 +108,11 @@ func TestStoryChangeOwners(t *testing.T) {
 		OwnersVersion int64    `json:"owners_version"`
 	}
 	res.decode(t, &r1)
-	if r1.OwnersVersion != 1 {
-		t.Fatalf("setServiceOwners: ожидалась версия 1, получена %d", r1.OwnersVersion)
+	if r1.OwnersVersion != 2 {
+		t.Fatalf("setServiceOwners: ожидалась версия 2, получена %d", r1.OwnersVersion)
 	}
-	// Отражение в каталоге (применяется асинхронно воркфлоу — ждём версию 1).
-	s := waitForOwnersVersion(t, token, projectDemo, name, 1)
+	// Отражение в каталоге (применяется асинхронно воркфлоу — ждём версию 2).
+	s := waitForOwnersVersion(t, token, projectDemo, name, 2)
 	if !sameSet(s.Owners, owners) {
 		t.Fatalf("каталог не отражает владельцев: got=%v want=%v", s.Owners, owners)
 	}
@@ -120,18 +153,13 @@ func TestStoryTransfer(t *testing.T) {
 	token := fetchIDToken(t, userDev, userDev)
 	name := uniqueName("e2e-xfer")
 
+	// mustCreateActive создаёт сервис с владельцем subjAlice (owners_version=1):
+	// владелец устанавливается атомарно при создании (ADR-0023), поэтому отдельная
+	// смена владельцев перед переносом не нужна — проверяем именно переезд этого
+	// владельца вместе с записью.
 	mustCreateActive(t, token, projectDemo, name)
 
-	// Задаём владельца, чтобы проверить его переезд вместе с записью.
-	res := callAPI(t, token, http.MethodPut, "/projects/"+projectDemo+"/services/"+name+"/owners",
-		map[string]any{"owners": []string{subjAlice}, "owners_version": 0})
-	if res.status != http.StatusOK {
-		t.Fatalf("setServiceOwners перед переносом: ожидался 200, получен %d (%s)", res.status, string(res.body))
-	}
-	// Дожидаемся отражения владельца в каталоге (версия 1) перед переносом.
-	waitForOwnersVersion(t, token, projectDemo, name, 1)
-
-	res = callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services/"+name+"/transfer",
+	res := callAPI(t, token, http.MethodPost, "/projects/"+projectDemo+"/services/"+name+"/transfer",
 		map[string]any{"target_project": projectDemo2})
 	if res.status != http.StatusOK {
 		t.Fatalf("transferService: ожидался 200, получен %d (%s)", res.status, string(res.body))

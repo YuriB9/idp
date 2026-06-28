@@ -34,14 +34,14 @@ func New(c client.Client, taskQueue string) *Starter {
 // StartCreateService запускает workflow с детерминированным WorkflowID. Политика
 // REJECT_DUPLICATE не даёт стартовать второй конкурентный workflow для того же
 // сервиса; повторный запуск после терминального статуса допускается.
-func (s *Starter) StartCreateService(ctx context.Context, serviceID, project, name string) error {
+func (s *Starter) StartCreateService(ctx context.Context, serviceID, project, name string, owners []string) error {
 	opts := client.StartWorkflowOptions{
 		ID:                       provisioning.WorkflowID(project, name),
 		TaskQueue:                s.taskQueue,
 		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 	}
-	in := provisioning.CreateServiceInput{ServiceID: serviceID, Project: project, Name: name}
+	in := provisioning.CreateServiceInput{ServiceID: serviceID, Project: project, Name: name, Owners: owners}
 	if _, err := s.client.ExecuteWorkflow(ctx, opts, provisioning.CreateServiceWorkflow, in); err != nil {
 		return fmt.Errorf("wfstarter: запуск workflow создания: %w", err)
 	}

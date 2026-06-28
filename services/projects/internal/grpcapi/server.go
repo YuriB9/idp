@@ -25,7 +25,7 @@ import (
 type Catalog interface {
 	Get(ctx context.Context, project, name string) (repository.Service, error)
 	List(ctx context.Context, project string, pageSize int, pageToken string) ([]repository.Service, string, error)
-	CreateService(ctx context.Context, project, name string) (repository.Service, error)
+	CreateService(ctx context.Context, project, name string, owners []string) (repository.Service, error)
 	SetServiceOwners(ctx context.Context, project, name string, owners []string, expectedVersion int64) ([]string, int64, error)
 	DecommissionService(ctx context.Context, project, name string, loadDrained bool) (repository.Service, error)
 	TransferService(ctx context.Context, project, name, target string) (repository.Service, error)
@@ -99,13 +99,24 @@ func (s *Server) CreateService(ctx context.Context, req *projectsv1.CreateServic
 	if req.GetProject() == "" || req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "project и name обязательны")
 	}
+	// Владельцы обязательны при создании (ADR-0023): пустой набор или пустой
+	// элемент → InvalidArgument до доменной операции (defense-in-depth; основная
+	// нормализация/проверка — в usecase).
+	if len(req.GetOwners()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "при создании требуется хотя бы один владелец")
+	}
+	for _, o := range req.GetOwners() {
+		if o == "" {
+			return nil, status.Error(codes.InvalidArgument, "владелец не может быть пустым")
+		}
+	}
 	// RBAC (defense-in-depth): проверка права create через IDM CheckAccess до
 	// любых доменных записей и запуска workflow. authorize возвращает готовый
 	// gRPC-статус PermissionDenied — наружу без раскрытия деталей.
 	if err := s.authorize(ctx, req.GetProject(), "create"); err != nil {
 		return nil, err
 	}
-	svc, err := s.catalog.CreateService(ctx, req.GetProject(), req.GetName())
+	svc, err := s.catalog.CreateService(ctx, req.GetProject(), req.GetName(), req.GetOwners())
 	if err != nil {
 		return nil, s.mapError(ctx, "CreateService", err)
 	}

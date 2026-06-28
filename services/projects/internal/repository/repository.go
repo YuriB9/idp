@@ -43,10 +43,14 @@ func New(pool *pgxpool.Pool) *Repo {
 	return &Repo{pool: pool}
 }
 
-// Create вставляет новую запись каталога. Нарушение уникальности (project, name)
-// возвращается как errs.ErrConflict.
+// Create вставляет новую запись каталога ВМЕСТЕ с её владельцами атомарно: строка
+// services, строки service_owners и стартовая owners_version (1 при непустом
+// наборе владельцев) фиксируются в одной транзакции (ADR-0011/0023). Нарушение
+// уникальности (project, name) возвращается как errs.ErrConflict.
 func (r *Repo) Create(ctx context.Context, s Service) error {
-	return insertService(ctx, r.pool, s)
+	return r.InTx(ctx, func(tx *TxRepo) error {
+		return insertService(ctx, tx.q, s)
+	})
 }
 
 // GetByName читает запись по (project, name). Отсутствие → errs.ErrNotFound.
@@ -198,17 +202,34 @@ func (t *TxRepo) TransitionStatus(ctx context.Context, id uuid.UUID, expected, n
 
 // --- общие реализации поверх Querier (пул или транзакция) ---
 
+// insertService вставляет запись services вместе с её владельцами поверх Querier.
+// owners_version стартует с 1 при непустом наборе владельцев (консистентно с
+// первой SetOwners 0→1) и с 0 при пустом. Владельцы ожидаются нормализованными
+// вызывающим (usecase): без пустых строк и дублей. Для атомарности должен
+// вызываться внутри транзакции (см. Repo.Create / TxRepo.Create).
 func insertService(ctx context.Context, q Querier, s Service) error {
+	var ownersVersion int64
+	if len(s.Owners) > 0 {
+		ownersVersion = 1
+	}
 	const query = `
-		INSERT INTO services (id, project, name, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, now(), now())`
-	_, err := q.Exec(ctx, query, s.ID, s.Project, s.Name, string(s.Status))
+		INSERT INTO services (id, project, name, status, owners_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, now(), now())`
+	_, err := q.Exec(ctx, query, s.ID, s.Project, s.Name, string(s.Status), ownersVersion)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
 			return fmt.Errorf("repository: дубликат (project, name): %w", errs.ErrConflict)
 		}
 		return fmt.Errorf("repository: insert service: %w", err)
+	}
+	// Владельцы фиксируются в той же транзакции, что и запись services.
+	for _, owner := range s.Owners {
+		if _, oerr := q.Exec(ctx,
+			`INSERT INTO service_owners (service_id, owner) VALUES ($1, $2)`,
+			s.ID, owner); oerr != nil {
+			return fmt.Errorf("repository: insert владельца: %w", oerr)
+		}
 	}
 	return nil
 }

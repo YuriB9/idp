@@ -174,7 +174,7 @@ func TestCreateService(t *testing.T) {
 	}{
 		{
 			name: "happy-path 201",
-			body: `{"name":"svc"}`,
+			body: `{"name":"svc","owners":["alice","bob"]}`,
 			stub: &stubProjectsClient{createResp: &projectsv1.CreateServiceResponse{
 				Id: "id-1", Status: projectsv1.ServiceStatus_SERVICE_STATUS_CREATING,
 			}},
@@ -183,7 +183,25 @@ func TestCreateService(t *testing.T) {
 		},
 		{
 			name:     "пустое имя → 400 без вызова gRPC",
-			body:     `{"name":""}`,
+			body:     `{"name":"","owners":["alice"]}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "без владельцев → 400 без вызова gRPC",
+			body:     `{"name":"svc"}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "пустой владелец → 400 без вызова gRPC",
+			body:     `{"name":"svc","owners":["alice",""]}`,
+			stub:     &stubProjectsClient{},
+			wantCode: http.StatusBadRequest,
+		},
+		{
+			name:     "дубли владельцев → 400 без вызова gRPC",
+			body:     `{"name":"svc","owners":["alice","alice"]}`,
 			stub:     &stubProjectsClient{},
 			wantCode: http.StatusBadRequest,
 		},
@@ -195,7 +213,7 @@ func TestCreateService(t *testing.T) {
 		},
 		{
 			name:     "конфликт имени → 409",
-			body:     `{"name":"dup"}`,
+			body:     `{"name":"dup","owners":["alice"]}`,
 			stub:     &stubProjectsClient{err: status.Error(codes.Aborted, "занято")},
 			wantCode: http.StatusConflict,
 		},
@@ -227,8 +245,14 @@ func TestCreateService(t *testing.T) {
 					t.Fatalf("CreateService вызван некорректно: %+v", tt.stub.gotCreate)
 				}
 			}
-			// Пустое имя/битый JSON не должны доходить до gRPC.
-			if tt.name == "пустое имя → 400 без вызова gRPC" && tt.stub.gotCreate != nil {
+			// Happy-path: владельцы из тела проброшены в gRPC без изменений.
+			if tt.name == "happy-path 201" {
+				if got := tt.stub.gotCreate.GetOwners(); len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+					t.Fatalf("владельцы в gRPC = %v, ожидали [alice bob]", got)
+				}
+			}
+			// Невалидное тело (включая владельцев) не должно доходить до gRPC.
+			if tt.wantCode == http.StatusBadRequest && tt.stub.gotCreate != nil {
 				t.Fatalf("gRPC не должен вызываться при невалидном теле")
 			}
 		})

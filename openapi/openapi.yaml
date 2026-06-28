@@ -754,12 +754,22 @@ components:
           description: Курсор следующей страницы; пустой — конец выборки.
     CreateServiceRequest:
       type: object
-      required: [name]
+      required: [name, owners]
       properties:
         name:
           type: string
           minLength: 1
           description: Имя создаваемого сервиса внутри проекта.
+        owners:
+          type: array
+          minItems: 1
+          description: >
+            Обязательный набор владельцев создаваемого сервиса. Минимум один
+            непустой владелец; сервер нормализует (без пустых строк и дублей) и
+            устанавливает атомарно с созданием (ADR-0011/0023).
+          items:
+            type: string
+            minLength: 1
     CreateServiceResult:
       type: object
       required: [id, status]
