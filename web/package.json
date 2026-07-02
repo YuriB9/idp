@@ -17,7 +17,7 @@
     "lint:openapi": "spectral lint ../openapi/openapi.yaml --ruleset ../.spectral.yaml --fail-severity=error"
   },
   "devDependencies": {
-    "@stoplight/spectral-cli": "6.16.0",
+    "@stoplight/spectral-cli": "6.16.1",
     "@tailwindcss/vite": "4.3.1",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
