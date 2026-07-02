@@ -9,7 +9,7 @@ require (
 	github.com/redis/go-redis/v9 v9.21.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.21.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 )
 
 require (
